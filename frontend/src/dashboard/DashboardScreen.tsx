@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 
@@ -24,6 +25,11 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
   const [notice, setNotice] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [actionKey, setActionKey] = useState<string>('');
+  const [question, setQuestion] = useState('What needs attention today?');
+  const [answer, setAnswer] = useState('');
+  const [command, setCommand] = useState('receive PO-1001');
+  const [commandMessage, setCommandMessage] = useState('');
+  const [workflowBusy, setWorkflowBusy] = useState<'ask' | 'preview' | 'run' | ''>('');
 
   async function loadDashboard() {
     setLoading(true);
@@ -49,6 +55,49 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
       setError(exc instanceof Error ? exc.message : 'Unable to run action.');
     } finally {
       setActionKey('');
+    }
+  }
+
+  async function askQuestion() {
+    setWorkflowBusy('ask');
+    setError('');
+    setAnswer('');
+    try {
+      const result = await api.ask(question);
+      setAnswer(result.answer);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Unable to ask ERP.');
+    } finally {
+      setWorkflowBusy('');
+    }
+  }
+
+  async function previewCommand() {
+    setWorkflowBusy('preview');
+    setError('');
+    setCommandMessage('');
+    try {
+      const result = await api.previewCommand(command);
+      setCommandMessage(result.message);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Unable to preview command.');
+    } finally {
+      setWorkflowBusy('');
+    }
+  }
+
+  async function runCommand() {
+    setWorkflowBusy('run');
+    setError('');
+    setCommandMessage('');
+    try {
+      const result = await api.runCommand(command);
+      setCommandMessage(result.message);
+      setSnapshot(await api.dashboard());
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Unable to run command.');
+    } finally {
+      setWorkflowBusy('');
     }
   }
 
@@ -142,6 +191,54 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
             </View>
           ))
         )}
+      </Section>
+
+      <Section title="Ask ERP">
+        <TextInput
+          accessibilityLabel="Ask ERP question"
+          multiline
+          onChangeText={setQuestion}
+          style={styles.input}
+          value={question}
+        />
+        <Pressable
+          accessibilityRole="button"
+          disabled={workflowBusy !== ''}
+          onPress={() => void askQuestion()}
+          style={styles.actionButton}
+        >
+          <Text style={styles.actionButtonText}>{workflowBusy === 'ask' ? 'Asking...' : 'Ask'}</Text>
+        </Pressable>
+        {answer ? <Text style={styles.answerText}>{answer}</Text> : null}
+      </Section>
+
+      <Section title="Command ERP">
+        <TextInput
+          accessibilityLabel="ERP command"
+          multiline
+          onChangeText={setCommand}
+          style={styles.input}
+          value={command}
+        />
+        <View style={styles.buttonRow}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={workflowBusy !== ''}
+            onPress={() => void previewCommand()}
+            style={styles.secondaryButton}
+          >
+            <Text style={styles.secondaryButtonText}>{workflowBusy === 'preview' ? 'Previewing...' : 'Preview'}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={workflowBusy !== ''}
+            onPress={() => void runCommand()}
+            style={styles.actionButton}
+          >
+            <Text style={styles.actionButtonText}>{workflowBusy === 'run' ? 'Running...' : 'Run'}</Text>
+          </Pressable>
+        </View>
+        {commandMessage ? <Text style={styles.answerText}>{commandMessage}</Text> : null}
       </Section>
 
       <Section title="Quick Actions">
@@ -364,6 +461,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  secondaryButton: {
+    backgroundColor: '#ffffff',
+    borderColor: '#1f2937',
+    borderRadius: 6,
+    borderWidth: 1,
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  secondaryButtonText: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  input: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#cbd5e1',
+    borderRadius: 6,
+    borderWidth: 1,
+    color: '#111827',
+    fontSize: 15,
+    minHeight: 76,
+    padding: 12,
+    textAlignVertical: 'top',
+  },
+  answerText: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 6,
+    color: '#374151',
+    fontSize: 14,
+    lineHeight: 20,
+    padding: 10,
   },
   dangerButton: {
     backgroundColor: '#ffffff',
