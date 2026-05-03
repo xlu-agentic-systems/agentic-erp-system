@@ -852,6 +852,7 @@ def render_page(question: str = "", answer: str = "", notice: str = "") -> bytes
         answer = ask_erp(question, data)
     llm_state = "LLM enabled" if AI_COPILOT and getattr(AI_COPILOT, "llm_enabled", lambda: False)() else "rules fallback"
     notice_html = f'<div class="notice">{esc(notice)}</div>' if notice else ""
+    legacy_notice_html = '<div class="notice">Legacy web fallback. The React Native frontend is the primary product UI.</div>'
 
     html_doc = f"""<!doctype html>
 <html lang="en">
@@ -871,6 +872,7 @@ def render_page(question: str = "", answer: str = "", notice: str = "") -> bytes
     </header>
 
     <main>
+        {legacy_notice_html}
         {notice_html}
         <section class="kpi-grid" aria-label="ERP KPIs">
             {render_kpis(data["kpis"])}

@@ -207,6 +207,7 @@ class AppHTTPTests(unittest.TestCase):
         self.assertIn("SO-5001", html)
         self.assertIn("PUMP-A", html)
         self.assertIn("AR Aging", html)
+        self.assertIn("Legacy web fallback", html)
 
     def test_quick_action_accepts_partial_invoice_payment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

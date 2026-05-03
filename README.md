@@ -21,32 +21,48 @@ Deferred areas include payroll, manufacturing, tax compliance, multi-currency ac
 
 ## Run
 
+The React Native/Expo app in `frontend/` is the primary product UI. The Python process remains the backend API and still serves a legacy HTML fallback at `http://127.0.0.1:8000`.
+
+Start the backend:
+
 ```bash
 python3 app.py
 ```
 
-Then open `http://127.0.0.1:8000`.
+Start the frontend:
+
+```bash
+cd frontend
+npm install --cache .npm-cache
+npm start
+```
+
+Set `EXPO_PUBLIC_ERP_API_URL` if the mobile app should call a backend other than `http://127.0.0.1:8000`.
 
 ## Test
 
 ```bash
 python3 -m unittest
+cd frontend
+npm test
+npm run typecheck
 ```
 
 ## Design
 
-The system uses four layers:
+The system uses five layers:
 
 1. `erp_core.py`: seeded ERP data and deterministic business calculations.
 2. `ai_copilot.py`: explainable recommendations, constrained natural-language intent handling, and an optional LLM answer path.
 3. `llm_client.py`: dependency-free OpenAI Responses API client using `OPENAI_API_KEY`.
-4. `app.py`: a dependency-free local web dashboard.
+4. `app.py`: dependency-free Python backend with `/api/v1` JSON endpoints and a legacy HTML fallback.
+5. `frontend/`: Expo/React Native primary UI.
 
 Copilot behavior is intentionally read-only. It explains, prioritizes, and recommends actions, but business state changes should remain explicit ERP transactions.
 
 ## Usable MVP Workflows
 
-The dashboard includes a `Command ERP` panel and quick-action buttons. Commands can be previewed before execution, and supported deterministic commands include:
+The React Native dashboard includes Ask ERP, Command ERP preview/run, and quick-action controls. Commands can be previewed before execution, and supported deterministic commands include:
 
 - `reorder PUMP-A`
 - `create a purchase order for Sensor T`
@@ -85,7 +101,7 @@ python3 scripts/backup_sqlite.py data/erp.backup.sqlite3
 
 See `docs/production_readiness.md` for the release checklist, storage contract, remaining risks, and next roadmap.
 
-The product surface is being migrated from raw server-rendered HTML/CSS to a React Native frontend. See `docs/react_native_migration.md` for the migration scope, API contract plan, and 10-cycle roadmap.
+See `docs/react_native_migration.md` for migration scope, API contract notes, and the 10-cycle roadmap.
 
 ## Optional LLM Mode
 
