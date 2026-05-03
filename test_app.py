@@ -350,6 +350,28 @@ class AppHTTPTests(unittest.TestCase):
         self.assertEqual("validation_error", payload["error"]["code"])
         self.assertEqual("Unknown ERP action.", payload["error"]["message"])
 
+    def test_api_create_po_action_allows_default_reorder_quantity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=True):
+                with LiveERPServer() as server:
+                    status, _, body = server.request(
+                        "POST",
+                        "/api/v1/actions",
+                        body=json.dumps({"action": "create_po", "sku": "PUMP-A"}),
+                        headers={"Content-Type": "application/json"},
+                    )
+                data = erp_state.load_data(db_path)
+                audit = erp_state.load_audit(db_path)
+
+        payload = json.loads(body)
+        created = data.purchase_orders[-1]
+        self.assertEqual(200, status)
+        self.assertTrue(payload["ok"])
+        self.assertEqual("PO-1003", created.id)
+        self.assertGreater(created.lines[0].quantity, 1)
+        self.assertEqual("create_po", audit[0]["action"])
+
     def test_api_rejects_malformed_json(self) -> None:
         with LiveERPServer() as server:
             status, content_type, body = server.request(

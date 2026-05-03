@@ -568,7 +568,8 @@ def run_quick_action_response(params: dict[str, list[str]]) -> tuple[int, str]:
         def mutate(data: Any) -> tuple[Any, str]:
             if action == "create_po":
                 sku = params.get("sku", [""])[0]
-                quantity = int(params.get("quantity", ["0"])[0])
+                quantity_raw = params.get("quantity", [""])[0].strip()
+                quantity = int(quantity_raw) if quantity_raw else None
                 updated, po = ERP_CORE.create_purchase_order(data, sku, quantity)
                 return updated, f"Created {po.id} for {sku} with {po.lines[0].quantity} units."
             if action == "receive_po":
