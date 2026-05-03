@@ -419,10 +419,12 @@ def json_response(payload: dict[str, Any]) -> bytes:
 def run_erp_command(command: str) -> str:
     if ADAPTIVE_ERP is None or ERP_STATE is None:
         return "ERP command engine is unavailable."
-    data = current_erp_data()
-    updated, result = ADAPTIVE_ERP.execute_goal(command, data)
+
+    def mutate(data: Any) -> tuple[Any, Any]:
+        return ADAPTIVE_ERP.execute_goal(command, data)
+
+    _, result = ERP_STATE.update_data(mutate)
     if result.changed:
-        ERP_STATE.save_data(updated)
         ERP_STATE.append_audit(result.message)
     return result.message
 
@@ -432,30 +434,30 @@ def run_quick_action(params: dict[str, list[str]]) -> str:
         return "ERP action engine is unavailable."
 
     action = params.get("action", [""])[0]
-    data = current_erp_data()
     try:
-        if action == "create_po":
-            sku = params.get("sku", [""])[0]
-            quantity = int(params.get("quantity", ["0"])[0])
-            updated, po = ERP_CORE.create_purchase_order(data, sku, quantity)
-            message = f"Created {po.id} for {sku} with {po.lines[0].quantity} units."
-        elif action == "receive_po":
-            po_id = params.get("po_id", [""])[0]
-            updated, po = ERP_CORE.receive_purchase_order(data, po_id)
-            message = f"Received {po.id}; inventory is updated."
-        elif action == "pay_invoice":
-            invoice_id = params.get("invoice_id", [""])[0]
-            updated, invoice = ERP_CORE.apply_invoice_payment(data, invoice_id)
-            message = f"Recorded payment for {invoice.id}; balance is {invoice.balance_due}."
-        elif action == "reset":
-            updated = ERP_STATE.reset_data()
-            message = "Reset ERP demo data."
-        else:
+        if action not in {"create_po", "receive_po", "pay_invoice", "reset"}:
             return "Unknown ERP action."
+
+        def mutate(data: Any) -> tuple[Any, str]:
+            if action == "create_po":
+                sku = params.get("sku", [""])[0]
+                quantity = int(params.get("quantity", ["0"])[0])
+                updated, po = ERP_CORE.create_purchase_order(data, sku, quantity)
+                return updated, f"Created {po.id} for {sku} with {po.lines[0].quantity} units."
+            if action == "receive_po":
+                po_id = params.get("po_id", [""])[0]
+                updated, po = ERP_CORE.receive_purchase_order(data, po_id)
+                return updated, f"Received {po.id}; inventory is updated."
+            if action == "pay_invoice":
+                invoice_id = params.get("invoice_id", [""])[0]
+                updated, invoice = ERP_CORE.apply_invoice_payment(data, invoice_id)
+                return updated, f"Recorded payment for {invoice.id}; balance is {invoice.balance_due}."
+            return ERP_CORE.seed_erp_data(), "Reset ERP demo data."
+
+        _, message = ERP_STATE.update_data(mutate)
     except (TypeError, ValueError) as exc:
         return str(exc)
 
-    ERP_STATE.save_data(updated)
     ERP_STATE.append_audit(message)
     return message
 

@@ -9,7 +9,13 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Any
+import threading
+from typing import Any, Callable, TypeVar
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - fallback for non-Unix local runs.
+    fcntl = None  # type: ignore[assignment]
 
 import erp_core
 
@@ -19,6 +25,8 @@ DEFAULT_STATE_PATH = BASE_DIR / "data" / "erp_state.json"
 DEFAULT_AUDIT_PATH = BASE_DIR / "data" / "audit.jsonl"
 STATE_SCHEMA_VERSION = 1
 _LAST_RECOVERY: dict[str, str] | None = None
+_PROCESS_LOCK = threading.Lock()
+T = TypeVar("T")
 
 
 def state_path() -> Path:
@@ -65,6 +73,26 @@ def reset_data(path: str | Path | None = None) -> erp_core.ERPData:
     data = erp_core.seed_erp_data()
     save_data(data, path)
     return data
+
+
+def update_data(
+    mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
+    path: str | Path | None = None,
+) -> tuple[erp_core.ERPData, T]:
+    target = Path(path) if path is not None else state_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = target.with_name(f"{target.name}.lock")
+    with _PROCESS_LOCK:
+        with lock_path.open("a", encoding="utf-8") as lock_handle:
+            _lock_file(lock_handle)
+            try:
+                current = load_data(target)
+                updated, result = mutator(current)
+                if updated is not current:
+                    save_data(updated, target)
+                return updated, result
+            finally:
+                _unlock_file(lock_handle)
 
 
 def append_audit(message: str, path: str | Path | None = None) -> None:
@@ -138,6 +166,16 @@ def _quarantine_state(target: Path) -> Path:
 
 def _utc_file_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _lock_file(handle: Any) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file(handle: Any) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _jsonable(value: Any) -> Any:
