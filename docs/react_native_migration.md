@@ -4,7 +4,9 @@
 
 Replace the raw server-rendered HTML/CSS product surface with a React Native frontend while preserving the Python ERP backend, SQLite persistence, workflow atomicity, audit behavior, and existing operational checks.
 
-The migration should be incremental. The backend must expose stable JSON APIs before the React Native app depends on it, and the legacy HTML routes should remain functional until the React Native surface covers the dashboard and workflows.
+The migration should be incremental. The backend must expose stable JSON APIs before the React Native app depends on it, and the legacy HTML routes should remain functional as a fallback until they are explicitly removed.
+
+Current status: the Expo app under `frontend/` is the documented primary UI. The Python server still serves the original HTML page as a legacy fallback for local troubleshooting.
 
 ## Product Scope
 
@@ -85,7 +87,7 @@ Error shape:
 | 6 | Ask and command workflows | Ask ERP and command preview/run screens work and have tests. |
 | 7 | UX hardening | Accessibility labels, disabled states, validation, timeouts, and responsive tablet layout improve operator usability. |
 | 8 | Operability | CORS/dev config, request IDs, API version metadata, frontend health checks, and smoke coverage land. |
-| 9 | Migration completion | React Native becomes the documented primary UI; raw HTML is removed or documented as temporary legacy fallback. |
+| 9 | Migration completion | React Native becomes the documented primary UI; raw HTML is documented as a temporary legacy fallback. |
 | 10 | Release candidate | Full backend/frontend verification passes; QA signs off; PM publishes next roadmap. |
 
 ## Current Tradeoffs
