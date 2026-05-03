@@ -316,6 +316,7 @@ FALLBACK_DATA = {
         {"id": "INV-9009", "customer": "Pioneer Parts", "amount": 18800, "status": "Overdue"},
         {"id": "INV-9010", "customer": "Harbor Industrial", "amount": 12400, "status": "Draft"},
     ],
+    "fulfillment_risks": [],
 }
 
 
@@ -376,7 +377,7 @@ def load_dashboard_data() -> dict[str, Any]:
     base["kpis"] = normalize_kpis(base.get("kpis"))
     base["risk_flags"] = normalize_risks(base.get("risk_flags"))
     base["roles"] = normalize_roles(base.get("roles"))
-    for key in ("inventory", "sales_orders", "purchase_orders", "invoices"):
+    for key in ("inventory", "sales_orders", "purchase_orders", "invoices", "fulfillment_risks"):
         base[key] = as_list(base.get(key)) or FALLBACK_DATA[key]
     base["audit_log"] = ERP_STATE.load_audit() if ERP_STATE is not None else []
 
@@ -729,6 +730,7 @@ def render_page(question: str = "", answer: str = "", notice: str = "") -> bytes
         </section>
 
         <section class="tables-grid">
+            {render_table("Fulfillment Risk", data["fulfillment_risks"], (("order_id", "Order"), ("customer", "Customer"), ("sku", "SKU"), ("required", "Required"), ("available", "Available"), ("status", "Status"), ("next_receipt", "Next Receipt")))}
             {render_table("Inventory", data["inventory"], (("sku", "SKU"), ("item", "Item"), ("stock", "Stock"), ("status", "Status")))}
             {render_table("Sales Orders", data["sales_orders"], (("id", "Order"), ("customer", "Customer"), ("total", "Total"), ("status", "Status")))}
             {render_table("Purchase Orders", data["purchase_orders"], (("id", "PO"), ("supplier", "Supplier"), ("total", "Total"), ("status", "Status")))}

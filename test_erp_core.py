@@ -13,6 +13,7 @@ from erp_core import (
     Vendor,
     cash_projection,
     delayed_purchase_orders,
+    fulfillment_risks,
     inventory_value,
     low_stock_items,
     money,
@@ -64,6 +65,17 @@ class SeededERPDataTests(unittest.TestCase):
     def test_cash_projection_rejects_negative_windows(self) -> None:
         with self.assertRaises(ValueError):
             cash_projection(self.data, self.today, days=-1)
+
+    def test_fulfillment_risks_show_orders_that_pressure_reorder_bands(self) -> None:
+        risks = fulfillment_risks(self.data)
+
+        pump_risk = next(risk for risk in risks if risk["sku"] == "PUMP-A")
+        self.assertEqual("SO-5001", pump_risk["order_id"])
+        self.assertEqual("Apex Manufacturing", pump_risk["customer"])
+        self.assertEqual("At risk", pump_risk["status"])
+        self.assertEqual(3, pump_risk["required"])
+        self.assertEqual(8, pump_risk["available"])
+        self.assertIn("PO-1001", pump_risk["next_receipt"])
 
 
 class CustomERPDataTests(unittest.TestCase):
