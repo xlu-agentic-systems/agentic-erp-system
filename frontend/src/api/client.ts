@@ -25,10 +25,12 @@ export type DashboardSnapshot = {
 export class ERPApiClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
+  private readonly timeoutMs: number;
 
-  constructor(options: { baseUrl?: string; fetcher?: typeof fetch } = {}) {
+  constructor(options: { baseUrl?: string; fetcher?: typeof fetch; timeoutMs?: number } = {}) {
     this.baseUrl = apiBaseUrl(options.baseUrl);
     this.fetcher = options.fetcher || fetch;
+    this.timeoutMs = options.timeoutMs ?? 10000;
   }
 
   dashboard(): Promise<DashboardSnapshot> {
@@ -64,12 +66,23 @@ export class ERPApiClient {
   }
 
   private async request<T>(path: string, init: RequestInit): Promise<T> {
-    const response = await this.fetcher(`${this.baseUrl}${path}`, init);
-    const envelope = (await response.json()) as ApiEnvelope<T>;
-    if (!response.ok || !envelope.ok) {
-      const message = envelope.ok ? `HTTP ${response.status}` : envelope.error.message;
-      throw new Error(message);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetcher(`${this.baseUrl}${path}`, { ...init, signal: controller.signal });
+      const envelope = (await response.json()) as ApiEnvelope<T>;
+      if (!response.ok || !envelope.ok) {
+        const message = envelope.ok ? `HTTP ${response.status}` : envelope.error.message;
+        throw new Error(message);
+      }
+      return envelope.data;
+    } catch (exc) {
+      if (exc instanceof Error && exc.name === 'AbortError') {
+        throw new Error('ERP API request timed out.');
+      }
+      throw exc;
+    } finally {
+      clearTimeout(timeout);
     }
-    return envelope.data;
   }
 }

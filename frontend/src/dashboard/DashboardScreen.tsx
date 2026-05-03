@@ -25,6 +25,7 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
   const [notice, setNotice] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [actionKey, setActionKey] = useState<string>('');
+  const [confirmReset, setConfirmReset] = useState(false);
   const [question, setQuestion] = useState('What needs attention today?');
   const [answer, setAnswer] = useState('');
   const [command, setCommand] = useState('receive PO-1001');
@@ -44,6 +45,14 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
   }
 
   async function runQuickAction(key: string, payload: Record<string, string | number>) {
+    if (payload.action === 'reset' && !confirmReset) {
+      setConfirmReset(true);
+      setNotice('Tap Confirm Reset Demo Data to reset the sample ERP state.');
+      return;
+    }
+    if (payload.action !== 'reset') {
+      setConfirmReset(false);
+    }
     setActionKey(key);
     setError('');
     setNotice('');
@@ -51,6 +60,7 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
       const result = await api.action(payload);
       setSnapshot(result.dashboard);
       setNotice(result.message);
+      setConfirmReset(false);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : 'Unable to run action.');
     } finally {
@@ -196,13 +206,16 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
       <Section title="Ask ERP">
         <TextInput
           accessibilityLabel="Ask ERP question"
+          editable={workflowBusy === ''}
           multiline
           onChangeText={setQuestion}
+          placeholder="Ask what needs attention today"
           style={styles.input}
           value={question}
         />
         <Pressable
           accessibilityRole="button"
+          accessibilityState={{ disabled: workflowBusy !== '' }}
           disabled={workflowBusy !== ''}
           onPress={() => void askQuestion()}
           style={styles.actionButton}
@@ -215,14 +228,17 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
       <Section title="Command ERP">
         <TextInput
           accessibilityLabel="ERP command"
+          editable={workflowBusy === ''}
           multiline
           onChangeText={setCommand}
+          placeholder="Try: receive PO-1001"
           style={styles.input}
           value={command}
         />
         <View style={styles.buttonRow}>
           <Pressable
             accessibilityRole="button"
+            accessibilityState={{ disabled: workflowBusy !== '' }}
             disabled={workflowBusy !== ''}
             onPress={() => void previewCommand()}
             style={styles.secondaryButton}
@@ -231,6 +247,7 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
           </Pressable>
           <Pressable
             accessibilityRole="button"
+            accessibilityState={{ disabled: workflowBusy !== '' }}
             disabled={workflowBusy !== ''}
             onPress={() => void runCommand()}
             style={styles.actionButton}
@@ -245,13 +262,23 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
         {quickActions(data).map((action) => (
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel={action.key === 'reset' && confirmReset ? 'Confirm reset demo data' : action.label}
+            accessibilityState={{ disabled: Boolean(actionKey) }}
             disabled={Boolean(actionKey)}
             key={action.key}
             onPress={() => void runQuickAction(action.key, action.payload)}
-            style={[styles.actionButton, action.tone === 'danger' ? styles.dangerButton : null]}
+            style={[
+              styles.actionButton,
+              action.tone === 'danger' ? styles.dangerButton : null,
+              actionKey ? styles.disabledButton : null,
+            ]}
           >
             <Text style={[styles.actionButtonText, action.tone === 'danger' ? styles.dangerButtonText : null]}>
-              {actionKey === action.key ? 'Working...' : action.label}
+              {actionKey === action.key
+                ? 'Working...'
+                : action.key === 'reset' && confirmReset
+                  ? 'Confirm Reset Demo Data'
+                  : action.label}
             </Text>
           </Pressable>
         ))}
@@ -507,5 +534,8 @@ const styles = StyleSheet.create({
   },
   dangerButtonText: {
     color: '#b91c1c',
+  },
+  disabledButton: {
+    opacity: 0.55,
   },
 });
