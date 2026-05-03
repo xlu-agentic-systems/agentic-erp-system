@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 import erp_core
@@ -16,6 +17,8 @@ import erp_core
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_PATH = BASE_DIR / "data" / "erp_state.json"
 DEFAULT_AUDIT_PATH = BASE_DIR / "data" / "audit.jsonl"
+STATE_SCHEMA_VERSION = 1
+_LAST_RECOVERY: dict[str, str] | None = None
 
 
 def state_path() -> Path:
@@ -26,18 +29,36 @@ def audit_path() -> Path:
     return Path(os.environ.get("ERP_AUDIT_PATH", DEFAULT_AUDIT_PATH))
 
 
+def last_recovery() -> dict[str, str] | None:
+    return dict(_LAST_RECOVERY) if _LAST_RECOVERY is not None else None
+
+
 def load_data(path: str | Path | None = None) -> erp_core.ERPData:
+    global _LAST_RECOVERY
     target = Path(path) if path is not None else state_path()
     if not target.exists():
         return erp_core.seed_erp_data()
-    payload = json.loads(target.read_text(encoding="utf-8"))
-    return _erp_data_from_dict(payload)
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        return _erp_data_from_dict(_state_data_payload(payload))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        backup_path = _quarantine_state(target)
+        _LAST_RECOVERY = {
+            "path": str(target),
+            "backup_path": str(backup_path),
+            "reason": type(exc).__name__,
+        }
+        return erp_core.seed_erp_data()
 
 
 def save_data(data: erp_core.ERPData, path: str | Path | None = None) -> None:
     target = Path(path) if path is not None else state_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(_jsonable(asdict(data)), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = {
+        "schema_version": STATE_SCHEMA_VERSION,
+        "data": _jsonable(asdict(data)),
+    }
+    _atomic_write_text(target, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def reset_data(path: str | Path | None = None) -> erp_core.ERPData:
@@ -49,7 +70,7 @@ def reset_data(path: str | Path | None = None) -> erp_core.ERPData:
 def append_audit(message: str, path: str | Path | None = None) -> None:
     target = Path(path) if path is not None else audit_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    entry = {"timestamp": datetime.now().isoformat(timespec="seconds"), "message": message}
+    entry = {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), "message": message}
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
 
@@ -58,8 +79,65 @@ def load_audit(path: str | Path | None = None, limit: int = 8) -> list[dict[str,
     target = Path(path) if path is not None else audit_path()
     if not target.exists():
         return []
-    entries = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines() if line.strip()]
+    entries = []
+    for line in target.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict) and "message" in entry:
+            entries.append(entry)
     return list(reversed(entries[-limit:]))
+
+
+def _state_data_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("state payload must be a JSON object")
+    if "data" not in payload:
+        return payload
+    if payload.get("schema_version") != STATE_SCHEMA_VERSION:
+        raise ValueError("unsupported state schema version")
+    data = payload["data"]
+    if not isinstance(data, dict):
+        raise ValueError("state data must be a JSON object")
+    return data
+
+
+def _atomic_write_text(target: Path, content: str) -> None:
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, target)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+
+
+def _quarantine_state(target: Path) -> Path:
+    base_name = f"{target.name}.corrupt-{_utc_file_stamp()}"
+    for index in range(1000):
+        candidate = target.with_name(base_name if index == 0 else f"{base_name}-{index}")
+        if not candidate.exists():
+            os.replace(target, candidate)
+            return candidate
+    raise RuntimeError(f"Could not allocate corrupt-state backup path for {target}")
+
+
+def _utc_file_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _jsonable(value: Any) -> Any:
