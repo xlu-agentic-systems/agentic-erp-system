@@ -11,7 +11,7 @@ import {
 
 import type { DashboardSnapshot } from '../api/client.ts';
 import { ERPApiClient } from '../api/client.ts';
-import { dashboardSections, rowSummary } from './viewModel.ts';
+import { dashboardSections, quickActions, rowSummary } from './viewModel.ts';
 
 type DashboardScreenProps = {
   client?: ERPApiClient;
@@ -21,7 +21,9 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
   const api = useMemo(() => client || new ERPApiClient(), [client]);
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string>('');
+  const [notice, setNotice] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const [actionKey, setActionKey] = useState<string>('');
 
   async function loadDashboard() {
     setLoading(true);
@@ -32,6 +34,21 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
       setError(exc instanceof Error ? exc.message : 'Unable to load dashboard.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runQuickAction(key: string, payload: Record<string, string | number>) {
+    setActionKey(key);
+    setError('');
+    setNotice('');
+    try {
+      const result = await api.action(payload);
+      setSnapshot(result.dashboard);
+      setNotice(result.message);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Unable to run action.');
+    } finally {
+      setActionKey('');
     }
   }
 
@@ -77,6 +94,7 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
       </View>
 
       {error ? <Text style={styles.inlineError}>{error}</Text> : null}
+      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
       <View style={styles.kpiGrid}>
         {data.kpis.map((kpi) => (
@@ -124,6 +142,22 @@ export function DashboardScreen({ client }: DashboardScreenProps) {
             </View>
           ))
         )}
+      </Section>
+
+      <Section title="Quick Actions">
+        {quickActions(data).map((action) => (
+          <Pressable
+            accessibilityRole="button"
+            disabled={Boolean(actionKey)}
+            key={action.key}
+            onPress={() => void runQuickAction(action.key, action.payload)}
+            style={[styles.actionButton, action.tone === 'danger' ? styles.dangerButton : null]}
+          >
+            <Text style={[styles.actionButtonText, action.tone === 'danger' ? styles.dangerButtonText : null]}>
+              {actionKey === action.key ? 'Working...' : action.label}
+            </Text>
+          </Pressable>
+        ))}
       </Section>
 
       {dashboardSections(data).map((section) => (
@@ -225,6 +259,12 @@ const styles = StyleSheet.create({
     color: '#991b1b',
     padding: 10,
   },
+  notice: {
+    backgroundColor: '#dcfce7',
+    borderRadius: 6,
+    color: '#166534',
+    padding: 10,
+  },
   kpiGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -312,5 +352,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     paddingTop: 9,
+  },
+  actionButton: {
+    backgroundColor: '#1f2937',
+    borderRadius: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  actionButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  dangerButton: {
+    backgroundColor: '#ffffff',
+    borderColor: '#dc2626',
+    borderWidth: 1,
+  },
+  dangerButtonText: {
+    color: '#b91c1c',
   },
 });
