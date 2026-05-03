@@ -29,6 +29,7 @@ STATE_SCHEMA_VERSION = 1
 _LAST_RECOVERY: dict[str, str] | None = None
 _PROCESS_LOCK = threading.Lock()
 T = TypeVar("T")
+AuditPayload = str | dict[str, Any] | None
 
 
 def state_path() -> Path:
@@ -88,7 +89,7 @@ def update_data(
 
 def update_data_with_audit(
     mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
-    audit_message: Callable[[T], str | None],
+    audit_message: Callable[[T], AuditPayload],
     path: str | Path | None = None,
 ) -> tuple[erp_core.ERPData, T]:
     if _should_use_sqlite(path) and _should_use_sqlite_audit(path):
@@ -102,11 +103,21 @@ def update_data_with_audit(
     return _update_data_json(mutator, path, audit_message)
 
 
-def append_audit(message: str, path: str | Path | None = None) -> None:
+def append_audit(
+    message: str,
+    path: str | Path | None = None,
+    *,
+    action: str = "",
+    entity_id: str = "",
+    status: str = "success",
+) -> None:
+    entry = _normalize_audit_payload(
+        {"message": message, "action": action, "entity_id": entity_id, "status": status}
+    )
     if _should_use_sqlite_audit(path):
-        _append_audit_sqlite(message, _resolved_db_path(path))
+        _append_audit_sqlite(entry, _resolved_db_path(path))
         return
-    _append_audit_json(message, path)
+    _append_audit_json(entry, path)
 
 
 def load_audit(path: str | Path | None = None, limit: int = 8) -> list[dict[str, str]]:
@@ -153,7 +164,7 @@ def _save_data_json(data: erp_core.ERPData, path: str | Path | None = None) -> N
 def _update_data_json(
     mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
     path: str | Path | None = None,
-    audit_message: Callable[[T], str | None] | None = None,
+    audit_message: Callable[[T], AuditPayload] | None = None,
 ) -> tuple[erp_core.ERPData, T]:
     target = Path(path) if path is not None else state_path()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -169,18 +180,18 @@ def _update_data_json(
                 if audit_message is not None:
                     message = audit_message(result)
                     if message:
-                        _append_audit_json(message)
+                        _append_audit_json(_normalize_audit_payload(message))
                 return updated, result
             finally:
                 _unlock_file(lock_handle)
 
 
-def _append_audit_json(message: str, path: str | Path | None = None) -> None:
+def _append_audit_json(entry: dict[str, str], path: str | Path | None = None) -> None:
     target = Path(path) if path is not None else audit_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    entry = {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), "message": message}
+    stamped = {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), **entry}
     with target.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        handle.write(json.dumps(stamped, sort_keys=True) + "\n")
 
 
 def _load_audit_json(path: str | Path | None = None, limit: int = 8) -> list[dict[str, str]]:
@@ -198,6 +209,20 @@ def _load_audit_json(path: str | Path | None = None, limit: int = 8) -> list[dic
         if isinstance(entry, dict) and "message" in entry:
             entries.append(entry)
     return list(reversed(entries[-limit:]))
+
+
+def _normalize_audit_payload(payload: AuditPayload) -> dict[str, str]:
+    if payload is None:
+        return {"message": "", "action": "", "entity_id": "", "status": "success"}
+    if isinstance(payload, str):
+        return {"message": payload, "action": "", "entity_id": "", "status": "success"}
+    message = str(payload.get("message", ""))
+    return {
+        "message": message,
+        "action": str(payload.get("action", "")),
+        "entity_id": str(payload.get("entity_id", "")),
+        "status": str(payload.get("status", "success") or "success"),
+    }
 
 
 def _should_use_sqlite(path: str | Path | None) -> bool:
@@ -249,10 +274,16 @@ def _ensure_sqlite_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
-            message TEXT NOT NULL
+            message TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT '',
+            entity_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'success'
         )
         """
     )
+    _ensure_sqlite_column(connection, "audit_log", "action", "TEXT NOT NULL DEFAULT ''")
+    _ensure_sqlite_column(connection, "audit_log", "entity_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_sqlite_column(connection, "audit_log", "status", "TEXT NOT NULL DEFAULT 'success'")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS storage_metadata (
@@ -263,6 +294,17 @@ def _ensure_sqlite_schema(connection: sqlite3.Connection) -> None:
         """
     )
     connection.commit()
+
+
+def _ensure_sqlite_column(
+    connection: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _load_data_sqlite(path: Path) -> erp_core.ERPData:
@@ -286,7 +328,7 @@ def _save_data_sqlite(data: erp_core.ERPData, path: Path) -> None:
 def _update_data_sqlite(
     mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
     path: Path,
-    audit_message: Callable[[T], str | None] | None = None,
+    audit_message: Callable[[T], AuditPayload] | None = None,
 ) -> tuple[erp_core.ERPData, T]:
     with _PROCESS_LOCK:
         with _connect_sqlite(path) as connection:
@@ -300,7 +342,7 @@ def _update_data_sqlite(
                 if audit_message is not None:
                     message = audit_message(result)
                     if message:
-                        _insert_audit_sqlite(connection, message)
+                        _insert_audit_sqlite(connection, _normalize_audit_payload(message))
                 connection.commit()
                 return updated, result
             except Exception:
@@ -308,17 +350,26 @@ def _update_data_sqlite(
                 raise
 
 
-def _append_audit_sqlite(message: str, path: Path) -> None:
+def _append_audit_sqlite(entry: dict[str, str], path: Path) -> None:
     with _connect_sqlite(path) as connection:
         _ensure_sqlite_schema(connection)
-        _insert_audit_sqlite(connection, message)
+        _insert_audit_sqlite(connection, entry)
         connection.commit()
 
 
-def _insert_audit_sqlite(connection: sqlite3.Connection, message: str) -> None:
+def _insert_audit_sqlite(connection: sqlite3.Connection, entry: dict[str, str]) -> None:
     connection.execute(
-        "INSERT INTO audit_log (timestamp, message) VALUES (?, ?)",
-        (datetime.now(timezone.utc).isoformat(timespec="seconds"), message),
+        """
+        INSERT INTO audit_log (timestamp, message, action, entity_id, status)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            entry["message"],
+            entry["action"],
+            entry["entity_id"],
+            entry["status"],
+        ),
     )
 
 
@@ -327,14 +378,23 @@ def _load_audit_sqlite(path: Path, limit: int = 8) -> list[dict[str, str]]:
         _ensure_sqlite_schema(connection)
         rows = connection.execute(
             """
-            SELECT timestamp, message
+            SELECT timestamp, message, action, entity_id, status
             FROM audit_log
             ORDER BY id DESC
             LIMIT ?
             """,
             (limit,),
         ).fetchall()
-    return [{"timestamp": row["timestamp"], "message": row["message"]} for row in rows]
+    return [
+        {
+            "timestamp": row["timestamp"],
+            "message": row["message"],
+            "action": row["action"],
+            "entity_id": row["entity_id"],
+            "status": row["status"],
+        }
+        for row in rows
+    ]
 
 
 def _read_sqlite_data(connection: sqlite3.Connection) -> erp_core.ERPData | None:

@@ -79,6 +79,8 @@ class AppHelperTests(unittest.TestCase):
         self.assertIn("Received PO-1001", message)
         self.assertEqual("received", po.status)
         self.assertEqual("Received PO-1001; inventory is updated.", audit[0]["message"])
+        self.assertEqual("receive_purchase_order", audit[0]["action"])
+        self.assertEqual("success", audit[0]["status"])
 
 
 class AppHTTPTests(unittest.TestCase):
@@ -200,11 +202,14 @@ class AppHTTPTests(unittest.TestCase):
             with patch.dict(os.environ, env):
                 message = app.run_quick_action(params)
                 data = erp_state.load_data(state_path)
+                audit = erp_state.load_audit(audit_path)
 
         invoice = next(invoice for invoice in data.invoices if invoice.id == "INV-9001")
         self.assertEqual("Recorded payment for INV-9001; balance is 1000.00.", message)
         self.assertEqual("open", invoice.status)
         self.assertEqual("1000.00", str(invoice.balance_due))
+        self.assertEqual("pay_invoice", audit[0]["action"])
+        self.assertEqual("INV-9001", audit[0]["entity_id"])
 
     def test_command_preview_does_not_persist_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
