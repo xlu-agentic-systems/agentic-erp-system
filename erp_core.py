@@ -313,6 +313,43 @@ def open_sales_orders(data: ERPData) -> list[SalesOrder]:
     return [order for order in data.sales_orders if status_key(order.status) not in closed_statuses]
 
 
+def fulfillment_risks(data: ERPData) -> list[dict[str, object]]:
+    """Open sales-order lines that would leave inventory below its reorder band."""
+
+    products = {product.id: product for product in data.products}
+    customers = {customer.id: customer for customer in data.customers}
+    risks: list[dict[str, object]] = []
+
+    for order in open_sales_orders(data):
+        customer = customers.get(order.customer_id, Customer(order.customer_id, order.customer_id, 0))
+        for line in order.lines:
+            product = products.get(line.product_id)
+            if product is None:
+                continue
+            inventory = _inventory_for_product(data, product.id)
+            available = inventory.available_quantity if inventory is not None else 0
+            projected_available = available - line.quantity
+            if projected_available > product.reorder_point:
+                continue
+            next_po = _next_open_purchase_order_for_product(data, product.id)
+            shortage = max(0, -projected_available)
+            risks.append(
+                {
+                    "order_id": order.id,
+                    "customer": customer.name,
+                    "sku": product.sku,
+                    "required": line.quantity,
+                    "available": available,
+                    "projected_available": projected_available,
+                    "shortage": shortage,
+                    "status": "Blocked" if shortage else "At risk",
+                    "next_receipt": f"{next_po.id} on {next_po.expected_date}" if next_po else "No open PO",
+                }
+            )
+
+    return sorted(risks, key=lambda item: (0 if item["status"] == "Blocked" else 1, str(item["order_id"]), str(item["sku"])))
+
+
 def find_product(data: ERPData, reference: str) -> Product | None:
     """Find a product by SKU, ID, or loose product-name match."""
 
@@ -497,6 +534,16 @@ def _inventory_for_product(data: ERPData, product_id: str) -> InventoryItem | No
     return None
 
 
+def _next_open_purchase_order_for_product(data: ERPData, product_id: str) -> PurchaseOrder | None:
+    candidates = [
+        order
+        for order in data.purchase_orders
+        if status_key(order.status) in {"open", "partially_received"}
+        and any(line.product_id == product_id for line in order.lines)
+    ]
+    return min(candidates, key=lambda order: order.expected_date) if candidates else None
+
+
 def _add_inventory_quantities(
     inventory: tuple[InventoryItem, ...],
     quantity_by_product: dict[str, int],
@@ -670,6 +717,7 @@ def build_dashboard_data(data: ERPData | None = None, as_of: date | None = None)
         "sales_orders": sales_rows,
         "purchase_orders": purchase_rows,
         "invoices": invoice_rows,
+        "fulfillment_risks": fulfillment_risks(data),
     }
 
 

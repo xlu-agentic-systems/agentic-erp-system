@@ -149,6 +149,18 @@ class AppHTTPTests(unittest.TestCase):
         self.assertIn("PO-1003", [po.id for po in data.purchase_orders])
         self.assertIn("PO-1004", [po.id for po in data.purchase_orders])
 
+    def test_dashboard_renders_fulfillment_risk_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "erp_state.json"
+            audit_path = Path(tmp) / "audit.jsonl"
+            env = {"ERP_STATE_PATH": str(state_path), "ERP_AUDIT_PATH": str(audit_path)}
+            with patch.dict(os.environ, env):
+                html = app.render_page().decode("utf-8")
+
+        self.assertIn("Fulfillment Risk", html)
+        self.assertIn("SO-5001", html)
+        self.assertIn("PUMP-A", html)
+
 
 if __name__ == "__main__":
     unittest.main()
