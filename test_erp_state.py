@@ -4,6 +4,7 @@ from datetime import date
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -36,7 +37,7 @@ class ERPStatePersistenceTests(unittest.TestCase):
     def test_audit_log_round_trips_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audit_path = Path(tmp) / "audit.jsonl"
-            erp_state.append_audit("Created PO-1003", audit_path)
+            erp_state.append_audit("Created PO-1003", audit_path, action="create_po", entity_id="PO-1003")
             with audit_path.open("a", encoding="utf-8") as handle:
                 handle.write("{partial json\n")
             erp_state.append_audit("Received PO-1001", audit_path)
@@ -45,6 +46,8 @@ class ERPStatePersistenceTests(unittest.TestCase):
             raw_first_line = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(["Received PO-1001", "Created PO-1003"], [entry["message"] for entry in messages])
+        self.assertEqual("create_po", messages[1]["action"])
+        self.assertEqual("PO-1003", messages[1]["entity_id"])
         self.assertTrue(raw_first_line["timestamp"].endswith("+00:00"))
 
     def test_corrupt_state_is_quarantined_and_seed_data_is_loaded(self) -> None:
@@ -112,6 +115,46 @@ class ERPStatePersistenceTests(unittest.TestCase):
         self.assertEqual("received", received.status)
         self.assertEqual(26, pump_inventory.quantity_on_hand)
         self.assertEqual(["Received PO-1001; inventory is updated."], [entry["message"] for entry in audit])
+
+    def test_sqlite_audit_records_structured_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            erp_state.append_audit(
+                "Created PO-1003",
+                db_path,
+                action="create_po",
+                entity_id="PO-1003",
+                status="success",
+            )
+
+            audit = erp_state.load_audit(db_path)
+
+        self.assertEqual("Created PO-1003", audit[0]["message"])
+        self.assertEqual("create_po", audit[0]["action"])
+        self.assertEqual("PO-1003", audit[0]["entity_id"])
+        self.assertEqual("success", audit[0]["status"])
+
+    def test_sqlite_audit_schema_migrates_message_only_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE audit_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        message TEXT NOT NULL
+                    )
+                    """
+                )
+
+            erp_state.append_audit("Legacy compatible", db_path)
+            audit = erp_state.load_audit(db_path)
+
+        self.assertEqual("Legacy compatible", audit[0]["message"])
+        self.assertEqual("", audit[0]["action"])
+        self.assertEqual("", audit[0]["entity_id"])
+        self.assertEqual("success", audit[0]["status"])
 
     def test_sqlite_update_data_serializes_concurrent_document_creation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -457,7 +457,13 @@ def run_erp_command_response(command: str) -> tuple[int, str]:
 
     _, result = ERP_STATE.update_data_with_audit(
         mutate,
-        lambda item: item.message if item.changed else None,
+        lambda item: {
+            "message": item.message,
+            "action": item.action,
+            "status": "success",
+        }
+        if item.changed
+        else None,
     )
     return (200 if result.success else 400), result.message
 
@@ -504,11 +510,29 @@ def run_quick_action_response(params: dict[str, list[str]]) -> tuple[int, str]:
                 return updated, f"Recorded payment for {invoice.id}; balance is {invoice.balance_due}."
             return ERP_CORE.seed_erp_data(), "Reset ERP demo data."
 
-        _, message = ERP_STATE.update_data_with_audit(mutate, lambda item: item)
+        _, message = ERP_STATE.update_data_with_audit(
+            mutate,
+            lambda item: {
+                "message": item,
+                "action": action,
+                "entity_id": quick_action_entity(action, params),
+                "status": "success",
+            },
+        )
     except (TypeError, ValueError) as exc:
         return 400, str(exc)
 
     return 200, message
+
+
+def quick_action_entity(action: str, params: dict[str, list[str]]) -> str:
+    if action == "create_po":
+        return params.get("sku", [""])[0]
+    if action == "receive_po":
+        return params.get("po_id", [""])[0]
+    if action == "pay_invoice":
+        return params.get("invoice_id", [""])[0]
+    return action
 
 
 def ask_erp(question: str, data: dict[str, Any]) -> str:
