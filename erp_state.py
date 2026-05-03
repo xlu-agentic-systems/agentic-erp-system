@@ -1,4 +1,4 @@
-"""Local JSON persistence for the ERP demo state."""
+"""Local persistence for the ERP demo state."""
 
 from __future__ import annotations
 
@@ -86,6 +86,22 @@ def update_data(
     return _update_data_json(mutator, path)
 
 
+def update_data_with_audit(
+    mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
+    audit_message: Callable[[T], str | None],
+    path: str | Path | None = None,
+) -> tuple[erp_core.ERPData, T]:
+    if _should_use_sqlite(path) and _should_use_sqlite_audit(path):
+        return _update_data_sqlite(mutator, _resolved_db_path(path), audit_message)
+    if _should_use_sqlite(path):
+        updated, result = _update_data_sqlite(mutator, _resolved_db_path(path))
+        message = audit_message(result)
+        if message:
+            append_audit(message)
+        return updated, result
+    return _update_data_json(mutator, path, audit_message)
+
+
 def append_audit(message: str, path: str | Path | None = None) -> None:
     if _should_use_sqlite_audit(path):
         _append_audit_sqlite(message, _resolved_db_path(path))
@@ -137,6 +153,7 @@ def _save_data_json(data: erp_core.ERPData, path: str | Path | None = None) -> N
 def _update_data_json(
     mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
     path: str | Path | None = None,
+    audit_message: Callable[[T], str | None] | None = None,
 ) -> tuple[erp_core.ERPData, T]:
     target = Path(path) if path is not None else state_path()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -149,6 +166,10 @@ def _update_data_json(
                 updated, result = mutator(current)
                 if updated is not current:
                     save_data(updated, target)
+                if audit_message is not None:
+                    message = audit_message(result)
+                    if message:
+                        _append_audit_json(message)
                 return updated, result
             finally:
                 _unlock_file(lock_handle)
@@ -265,6 +286,7 @@ def _save_data_sqlite(data: erp_core.ERPData, path: Path) -> None:
 def _update_data_sqlite(
     mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
     path: Path,
+    audit_message: Callable[[T], str | None] | None = None,
 ) -> tuple[erp_core.ERPData, T]:
     with _PROCESS_LOCK:
         with _connect_sqlite(path) as connection:
@@ -275,6 +297,10 @@ def _update_data_sqlite(
                 updated, result = mutator(current)
                 if updated is not current:
                     _write_sqlite_data(connection, updated)
+                if audit_message is not None:
+                    message = audit_message(result)
+                    if message:
+                        _insert_audit_sqlite(connection, message)
                 connection.commit()
                 return updated, result
             except Exception:
@@ -285,11 +311,15 @@ def _update_data_sqlite(
 def _append_audit_sqlite(message: str, path: Path) -> None:
     with _connect_sqlite(path) as connection:
         _ensure_sqlite_schema(connection)
-        connection.execute(
-            "INSERT INTO audit_log (timestamp, message) VALUES (?, ?)",
-            (datetime.now(timezone.utc).isoformat(timespec="seconds"), message),
-        )
+        _insert_audit_sqlite(connection, message)
         connection.commit()
+
+
+def _insert_audit_sqlite(connection: sqlite3.Connection, message: str) -> None:
+    connection.execute(
+        "INSERT INTO audit_log (timestamp, message) VALUES (?, ?)",
+        (datetime.now(timezone.utc).isoformat(timespec="seconds"), message),
+    )
 
 
 def _load_audit_sqlite(path: Path, limit: int = 8) -> list[dict[str, str]]:

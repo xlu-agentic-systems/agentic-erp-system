@@ -148,6 +148,30 @@ class ERPStatePersistenceTests(unittest.TestCase):
         self.assertTrue(status["writeable"])
         self.assertNotIn("error", status)
 
+    def test_sqlite_update_with_audit_rolls_back_when_audit_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            erp_state.reset_data(db_path)
+
+            def mutate(data: erp_core.ERPData) -> tuple[erp_core.ERPData, str]:
+                updated, po = erp_core.receive_purchase_order(data, "PO-1001")
+                return updated, f"Received {po.id}"
+
+            def fail_audit(_: str) -> str:
+                raise RuntimeError("audit unavailable")
+
+            with self.assertRaises(RuntimeError):
+                erp_state.update_data_with_audit(mutate, fail_audit, db_path)
+
+            loaded = erp_state.load_data(db_path)
+            audit = erp_state.load_audit(db_path)
+
+        po = next(order for order in loaded.purchase_orders if order.id == "PO-1001")
+        inventory = next(item for item in loaded.inventory if item.product_id == "P-200")
+        self.assertEqual("open", po.status)
+        self.assertEqual(14, inventory.quantity_on_hand)
+        self.assertEqual([], audit)
+
 
 if __name__ == "__main__":
     unittest.main()
