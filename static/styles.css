@@ -70,7 +70,8 @@ main {
 
 .kpi-grid,
 .overview-grid,
-.tables-grid {
+.tables-grid,
+.workflow-grid {
   display: grid;
   gap: 16px;
 }
@@ -82,6 +83,7 @@ main {
 .kpi-card,
 .panel,
 .ask-panel,
+.command-panel,
 .table-panel {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -129,6 +131,7 @@ label {
 
 .panel,
 .ask-panel,
+.command-panel,
 .table-panel {
   padding: 18px;
 }
@@ -203,7 +206,8 @@ label {
   border-bottom: 0;
 }
 
-.ask-panel {
+.ask-panel,
+.command-panel {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -250,6 +254,44 @@ output {
   padding: 10px 12px;
   background: #ecfdf5;
   color: #134e4a;
+}
+
+.notice {
+  margin-bottom: 16px;
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #ecfdf5;
+  color: #134e4a;
+  font-weight: 700;
+}
+
+.workflow-grid {
+  grid-template-columns: 1.1fr 1fr 1fr;
+  margin-top: 16px;
+}
+
+.action-list {
+  display: grid;
+  gap: 10px;
+}
+
+.inline-action {
+  margin: 0;
+}
+
+.inline-action button {
+  width: 100%;
+  text-align: left;
+}
+
+.reset-action button {
+  background: #4b5563;
+}
+
+.muted-copy {
+  margin: 0;
+  color: var(--muted);
 }
 
 .tables-grid {
@@ -301,6 +343,10 @@ tbody tr:last-child td {
   }
 
   .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-grid {
     grid-template-columns: 1fr;
   }
 }

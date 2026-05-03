@@ -7,7 +7,7 @@ sample company, or construct their own records for tests and simulations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Iterable
@@ -313,6 +313,130 @@ def open_sales_orders(data: ERPData) -> list[SalesOrder]:
     return [order for order in data.sales_orders if status_key(order.status) not in closed_statuses]
 
 
+def find_product(data: ERPData, reference: str) -> Product | None:
+    """Find a product by SKU, ID, or loose product-name match."""
+
+    normalized = _search_key(reference)
+    for product in data.products:
+        if normalized in {_search_key(product.id), _search_key(product.sku), _search_key(product.name)}:
+            return product
+    for product in data.products:
+        if normalized and normalized in _search_key(product.name):
+            return product
+    return None
+
+
+def find_vendor_for_product(data: ERPData, product: Product, vendor_id: str | None = None) -> Vendor:
+    if vendor_id:
+        for vendor in data.vendors:
+            if _search_key(vendor.id) == _search_key(vendor_id) or _search_key(vendor.name) == _search_key(vendor_id):
+                return vendor
+        raise ValueError(f"Unknown vendor: {vendor_id}")
+
+    candidates = [vendor for vendor in data.vendors if product.sku in vendor.supplied_skus]
+    if not candidates:
+        raise ValueError(f"No approved vendor supplies {product.sku}")
+    return sorted(candidates, key=lambda vendor: (-vendor.reliability, vendor.lead_time_days, vendor.name))[0]
+
+
+def reorder_quantity(data: ERPData, product: Product) -> int:
+    inventory = _inventory_for_product(data, product.id)
+    available = inventory.available_quantity if inventory else 0
+    target = max(product.reorder_point * 2, product.reorder_point + 10)
+    return max(target - available, 1)
+
+
+def create_purchase_order(
+    data: ERPData,
+    product_reference: str,
+    quantity: int | None = None,
+    vendor_id: str | None = None,
+    as_of: date | None = None,
+) -> tuple[ERPData, PurchaseOrder]:
+    as_of = as_of or date.today()
+    product = find_product(data, product_reference)
+    if product is None:
+        raise ValueError(f"Unknown product: {product_reference}")
+    quantity = quantity if quantity is not None else reorder_quantity(data, product)
+    if quantity <= 0:
+        raise ValueError("quantity must be positive")
+
+    vendor = find_vendor_for_product(data, product, vendor_id)
+    purchase_order = PurchaseOrder(
+        id=next_document_id((po.id for po in data.purchase_orders), "PO"),
+        vendor_id=vendor.id,
+        order_date=as_of,
+        expected_date=as_of + timedelta(days=vendor.lead_time_days),
+        status="open",
+        lines=(OrderLine(product.id, quantity, product.unit_cost),),
+    )
+    return replace(data, purchase_orders=data.purchase_orders + (purchase_order,)), purchase_order
+
+
+def receive_purchase_order(
+    data: ERPData,
+    purchase_order_id: str,
+    as_of: date | None = None,
+) -> tuple[ERPData, PurchaseOrder]:
+    del as_of
+    wanted = normalize_document_id(purchase_order_id, "PO")
+    updated_purchase_orders: list[PurchaseOrder] = []
+    received_order: PurchaseOrder | None = None
+    quantity_by_product: dict[str, int] = {}
+
+    for order in data.purchase_orders:
+        if _search_key(order.id) != _search_key(wanted):
+            updated_purchase_orders.append(order)
+            continue
+        if status_key(order.status) == "received":
+            raise ValueError(f"{order.id} is already received")
+        received_order = replace(order, status="received")
+        updated_purchase_orders.append(received_order)
+        for line in order.lines:
+            quantity_by_product[line.product_id] = quantity_by_product.get(line.product_id, 0) + line.quantity
+
+    if received_order is None:
+        raise ValueError(f"Unknown purchase order: {purchase_order_id}")
+
+    updated_inventory = _add_inventory_quantities(data.inventory, quantity_by_product)
+    return replace(data, inventory=updated_inventory, purchase_orders=tuple(updated_purchase_orders)), received_order
+
+
+def apply_invoice_payment(
+    data: ERPData,
+    invoice_id: str,
+    amount: Money | str | int | float | None = None,
+    as_of: date | None = None,
+) -> tuple[ERPData, Invoice]:
+    del as_of
+    wanted = normalize_document_id(invoice_id, "INV")
+    updated_invoices: list[Invoice] = []
+    paid_invoice: Invoice | None = None
+    payment_total = money("0.00")
+
+    for invoice in data.invoices:
+        if _search_key(invoice.id) != _search_key(wanted):
+            updated_invoices.append(invoice)
+            continue
+        if invoice.balance_due <= 0 or status_key(invoice.status) == "paid":
+            raise ValueError(f"{invoice.id} is already paid")
+        payment = invoice.balance_due if amount is None else money(amount)
+        if payment <= 0:
+            raise ValueError("payment amount must be positive")
+        if payment > invoice.balance_due:
+            raise ValueError("payment amount cannot exceed invoice balance")
+        new_paid = invoice.amount_paid + payment
+        status = "paid" if new_paid >= invoice.amount else invoice.status
+        paid_invoice = replace(invoice, amount_paid=new_paid, status=status)
+        updated_invoices.append(paid_invoice)
+        payment_total = payment
+
+    if paid_invoice is None:
+        raise ValueError(f"Unknown invoice: {invoice_id}")
+
+    return replace(data, invoices=tuple(updated_invoices), current_cash=data.current_cash + payment_total), paid_invoice
+
+
 def cash_projection(data: ERPData, as_of: date | None = None, days: int = 30) -> Money:
     """Project cash by adding receivables and subtracting open PO commitments.
 
@@ -339,6 +463,52 @@ def cash_projection(data: ERPData, as_of: date | None = None, days: int = 30) ->
         and as_of <= po.expected_date <= through
     )
     return data.current_cash + expected_receipts - expected_payments
+
+
+def normalize_document_id(value: str, prefix: str) -> str:
+    normalized = str(value).strip().upper().replace(" ", "-")
+    if normalized.startswith(prefix + "-"):
+        return normalized
+    if normalized.startswith(prefix):
+        suffix = normalized[len(prefix) :].lstrip("-")
+        return f"{prefix}-{suffix}"
+    digits = "".join(ch for ch in normalized if ch.isdigit())
+    return f"{prefix}-{digits}" if digits else normalized
+
+
+def next_document_id(existing_ids: Iterable[str], prefix: str) -> str:
+    max_number = 0
+    for value in existing_ids:
+        normalized = normalize_document_id(value, prefix)
+        digits = "".join(ch for ch in normalized if ch.isdigit())
+        if digits:
+            max_number = max(max_number, int(digits))
+    return f"{prefix}-{max_number + 1}"
+
+
+def _search_key(value: object) -> str:
+    return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+
+def _inventory_for_product(data: ERPData, product_id: str) -> InventoryItem | None:
+    for item in data.inventory:
+        if item.product_id == product_id:
+            return item
+    return None
+
+
+def _add_inventory_quantities(
+    inventory: tuple[InventoryItem, ...],
+    quantity_by_product: dict[str, int],
+) -> tuple[InventoryItem, ...]:
+    remaining = dict(quantity_by_product)
+    updated: list[InventoryItem] = []
+    for item in inventory:
+        delta = remaining.pop(item.product_id, 0)
+        updated.append(replace(item, quantity_on_hand=item.quantity_on_hand + delta))
+    for product_id, quantity in remaining.items():
+        updated.append(InventoryItem(product_id, quantity))
+    return tuple(updated)
 
 
 def cash_projection_details(

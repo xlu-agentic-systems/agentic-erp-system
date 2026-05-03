@@ -14,6 +14,8 @@ The MVP covers the ERP workflows that make the system feel integrated:
 - Customer invoices and overdue receivables
 - Simplified cash and inventory reporting
 - Rules-based copilot summaries, risk flags, and question answering
+- Natural-language workflow commands for reorder, receiving, and invoice payment
+- Local JSON persistence for the demo state and activity log
 
 Deferred areas include persistence, payroll, manufacturing, tax compliance, multi-currency accounting, full accounting correctness, and autonomous transaction execution.
 
@@ -41,6 +43,17 @@ The system uses three layers:
 4. `app.py`: a dependency-free local web dashboard.
 
 Copilot behavior is intentionally read-only. It explains, prioritizes, and recommends actions, but business state changes should remain explicit ERP transactions.
+
+## Usable MVP Workflows
+
+The dashboard includes a `Command ERP` panel and quick-action buttons. Supported deterministic commands include:
+
+- `reorder PUMP-A`
+- `create a purchase order for Sensor T`
+- `receive PO-1001`
+- `mark INV-9001 paid`
+
+Workflow changes are saved to `data/erp_state.json`, and the activity log is saved to `data/audit.jsonl`. Both files are ignored by git.
 
 ## Optional LLM Mode
 

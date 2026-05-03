@@ -1,7 +1,11 @@
 import unittest
+import os
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 import app
+import erp_state
 
 
 class AppHelperTests(unittest.TestCase):
@@ -23,6 +27,20 @@ class AppHelperTests(unittest.TestCase):
         self.assertIn("SENSOR-T", answer)
         self.assertNotIn("BOLT-10", answer)
         self.assertNotIn("VALVE-S", answer)
+
+    def test_command_updates_persistent_erp_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "erp_state.json"
+            audit_path = Path(tmp) / "audit.jsonl"
+            with patch.dict(os.environ, {"ERP_STATE_PATH": str(state_path), "ERP_AUDIT_PATH": str(audit_path)}):
+                message = app.run_erp_command("receive PO-1001")
+                data = erp_state.load_data(state_path)
+                po = next(order for order in data.purchase_orders if order.id == "PO-1001")
+                audit = erp_state.load_audit(audit_path)
+
+        self.assertIn("Received PO-1001", message)
+        self.assertEqual("received", po.status)
+        self.assertEqual("Received PO-1001; inventory is updated.", audit[0]["message"])
 
 
 if __name__ == "__main__":
