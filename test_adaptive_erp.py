@@ -64,6 +64,24 @@ class AdaptiveERPWorkflowTests(unittest.TestCase):
         self.assertEqual(Decimal("1000.00"), invoice.balance_due)
         self.assertIn("Recorded payment of 500", result.message)
 
+    def test_preview_goal_describes_action_without_changing_data(self) -> None:
+        result = adaptive_erp.preview_goal("receive PO-1001", self.data, self.today)
+
+        original_po = next(po for po in self.data.purchase_orders if po.id == "PO-1001")
+        self.assertTrue(result.success)
+        self.assertFalse(result.changed)
+        self.assertEqual("receive_purchase_order", result.action)
+        self.assertIn("Preview: receive PO-1001", result.message)
+        self.assertEqual("open", original_po.status)
+
+    def test_negated_command_is_rejected_without_changing_data(self) -> None:
+        updated, result = adaptive_erp.execute_goal("do not receive PO-1001", self.data, self.today)
+
+        self.assertIs(updated, self.data)
+        self.assertFalse(result.success)
+        self.assertFalse(result.changed)
+        self.assertEqual("negated", result.action)
+
     def test_unknown_goal_is_actionable_without_changing_data(self) -> None:
         updated, result = adaptive_erp.execute_goal("make the business better", self.data, self.today)
 

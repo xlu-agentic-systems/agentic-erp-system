@@ -431,6 +431,14 @@ def run_erp_command(command: str) -> str:
     return result.message
 
 
+def preview_erp_command(command: str) -> str:
+    if ADAPTIVE_ERP is None or ERP_STATE is None:
+        return "ERP command preview is unavailable."
+    data = current_erp_data()
+    result = ADAPTIVE_ERP.preview_goal(command, data)
+    return result.message
+
+
 def run_quick_action(params: dict[str, list[str]]) -> str:
     if ERP_CORE is None or ERP_STATE is None:
         return "ERP action engine is unavailable."
@@ -714,7 +722,10 @@ def render_page(question: str = "", answer: str = "", notice: str = "") -> bytes
                 </div>
                 <label for="command">Command</label>
                 <textarea id="command" name="command" rows="3" placeholder="Try: reorder PUMP-A, receive PO-1001, or mark INV-9001 paid"></textarea>
-                <button type="submit">Run Command</button>
+                <div class="button-row">
+                    <button type="submit" name="mode" value="preview">Preview Command</button>
+                    <button type="submit" name="mode" value="run">Run Command</button>
+                </div>
             </form>
             <div class="panel">
                 <div class="section-heading">
@@ -786,7 +797,11 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
             self.respond(200, render_page(question=question), "text/html; charset=utf-8")
             return
         if self.path == "/command":
-            message = run_erp_command(params.get("command", [""])[0])
+            command = params.get("command", [""])[0]
+            if params.get("mode", ["run"])[0] == "preview":
+                message = preview_erp_command(command)
+            else:
+                message = run_erp_command(command)
             self.respond(200, render_page(notice=message), "text/html; charset=utf-8")
             return
         message = run_quick_action(params)
