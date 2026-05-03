@@ -36,7 +36,26 @@ python3 -m unittest
 The system uses three layers:
 
 1. `erp_core.py`: seeded ERP data and deterministic business calculations.
-2. `ai_copilot.py`: explainable recommendations and constrained natural-language intent handling.
-3. `app.py`: a dependency-free local web dashboard.
+2. `ai_copilot.py`: explainable recommendations, constrained natural-language intent handling, and an optional LLM answer path.
+3. `llm_client.py`: dependency-free OpenAI Responses API client using `OPENAI_API_KEY`.
+4. `app.py`: a dependency-free local web dashboard.
 
 Copilot behavior is intentionally read-only. It explains, prioritizes, and recommends actions, but business state changes should remain explicit ERP transactions.
+
+## Optional LLM Mode
+
+The app uses deterministic rules by default. If `.env` or the shell environment provides `OPENAI_API_KEY`, the Ask ERP panel calls the OpenAI Responses API and gives the model only a read-only, JSON summary of the ERP snapshot and the deterministic rules answer.
+
+Supported environment keys:
+
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`, optional, defaults to `gpt-5.4`
+- `OPENAI_TIMEOUT_SECONDS`, optional, defaults to `20`
+- `OPENAI_BASE_URL`, optional, defaults to `https://api.openai.com/v1`
+- `OPENAI_CA_BUNDLE`, optional path to a CA bundle when local Python certificate discovery is broken
+
+Run a live smoke test with:
+
+```bash
+python3 -m llm_client "Reply OK for the ERP LLM smoke test."
+```

@@ -8,9 +8,12 @@ ERP assistant can sit across sales, inventory, procurement, and finance.
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import dataclass
 from datetime import date
 from typing import Iterable
+
+import llm_client
 
 
 @dataclass(frozen=True)
@@ -293,6 +296,90 @@ def workflow_suggestions(data: object, erp_core_module: object | None = None) ->
         if insight.type in {"finance", "procurement", "cashflow"}:
             suggestions.append(insight.recommended_action)
     return suggestions[:8]
+
+
+def llm_enabled() -> bool:
+    return llm_client.is_configured()
+
+
+def llm_operating_context(data: object, erp_core_module: object | None = None) -> dict[str, object]:
+    insights = build_insights(data, erp_core_module)
+    context: dict[str, object] = {
+        "data_source": "synthetic in-memory ERP sample data",
+        "scope": "read-only analytics; no ERP transactions are executed",
+        "top_risks": [
+            {
+                "type": insight.type,
+                "severity": insight.severity,
+                "title": insight.title,
+                "entity": insight.entity,
+                "reason": insight.reason,
+                "recommended_action": insight.recommended_action,
+            }
+            for insight in insights[:8]
+        ],
+        "reorder_recommendations": reorder_recommendations(data, erp_core_module)[:6],
+        "workflow_suggestions": workflow_suggestions(data, erp_core_module)[:8],
+    }
+
+    if erp_core_module is not None:
+        for name in ("cash_projection_details", "open_sales_orders"):
+            value = _call(erp_core_module, name, data, None)
+            if value is not None:
+                context[name] = _to_jsonable(value)
+    else:
+        context["dashboard_kpis"] = _items(data, "kpis")
+        context["dashboard_inventory"] = _items(data, "inventory")
+        context["dashboard_purchase_orders"] = _items(data, "purchase_orders")
+        context["dashboard_invoices"] = _items(data, "invoices")
+    return context
+
+
+def _to_jsonable(value: object) -> object:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(item) for item in value]
+    if hasattr(value, "__dict__"):
+        return {
+            key: _to_jsonable(item)
+            for key, item in vars(value).items()
+            if not key.startswith("_")
+        }
+    return str(value)
+
+
+def answer_question_with_llm(
+    question: str,
+    data: object,
+    erp_core_module: object | None = None,
+    client: llm_client.OpenAIResponsesClient | None = None,
+) -> str:
+    """Answer through a real OpenAI Responses API call when configured."""
+
+    deterministic_answer = answer_question(question, data, erp_core_module)
+    context = llm_operating_context(data, erp_core_module)
+    prompt = {
+        "user_question": question,
+        "deterministic_rules_answer": deterministic_answer,
+        "erp_context": context,
+    }
+    instructions = (
+        "You are a read-only ERP copilot for a synthetic demo system. "
+        "Use only the supplied ERP context and deterministic rules answer. "
+        "Do not invent records, execute transactions, or imply this is live production data. "
+        "Answer in 3 concise sentences or fewer. If the context is insufficient, say so."
+    )
+    active_client = client or llm_client.OpenAIResponsesClient()
+    return active_client.create_text_response(
+        instructions=instructions,
+        input_text=json.dumps(prompt, default=str, sort_keys=True),
+        max_output_tokens=360,
+    )
 
 
 def answer_question(question: str, data: object, erp_core_module: object | None = None) -> str:

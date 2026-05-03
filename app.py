@@ -374,6 +374,17 @@ def ask_erp(question: str, data: dict[str, Any]) -> str:
 
     seed = data.get("_seed") or seeded_data() or data
     if AI_COPILOT is not None and ERP_CORE is not None:
+        answer_question_with_llm = getattr(AI_COPILOT, "answer_question_with_llm", None)
+        llm_enabled = getattr(AI_COPILOT, "llm_enabled", None)
+        if callable(answer_question_with_llm) and callable(llm_enabled) and llm_enabled():
+            try:
+                answer = answer_question_with_llm(clean_question, seed, ERP_CORE)
+            except Exception as exc:
+                rules_answer = AI_COPILOT.answer_question(clean_question, seed, ERP_CORE)
+                return f"LLM unavailable ({type(exc).__name__}). Rules answer: {rules_answer}"
+            if answer:
+                return text(answer)
+
         answer_question = getattr(AI_COPILOT, "answer_question", None)
         if callable(answer_question):
             answer = answer_question(clean_question, seed, ERP_CORE)
@@ -483,6 +494,7 @@ def render_page(question: str = "", answer: str = "") -> bytes:
     data = load_dashboard_data()
     if question and not answer:
         answer = ask_erp(question, data)
+    llm_state = "LLM enabled" if AI_COPILOT and getattr(AI_COPILOT, "llm_enabled", lambda: False)() else "rules fallback"
 
     html_doc = f"""<!doctype html>
 <html lang="en">
@@ -498,7 +510,7 @@ def render_page(question: str = "", answer: str = "") -> bytes:
             <p>ERP Analytics Demo</p>
             <h1>Operating Snapshot</h1>
         </div>
-        <span class="system-pill">Synthetic sample data | Rules: {"loaded" if ERP_CORE and AI_COPILOT else "fallback"}</span>
+        <span class="system-pill">Synthetic sample data | {esc(llm_state)}</span>
     </header>
 
     <main>
