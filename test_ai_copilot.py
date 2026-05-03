@@ -5,6 +5,17 @@ import ai_copilot
 import erp_core
 
 
+class FakeLLMClient:
+    def __init__(self) -> None:
+        self.instructions = ""
+        self.input_text = ""
+
+    def create_text_response(self, *, instructions: str, input_text: str, max_output_tokens: int = 500) -> str:
+        self.instructions = instructions
+        self.input_text = input_text
+        return "LLM-backed ERP answer"
+
+
 class AICopilotTests(unittest.TestCase):
     def setUp(self) -> None:
         self.data = erp_core.seed_erp_data(date(2026, 5, 2))
@@ -37,6 +48,16 @@ class AICopilotTests(unittest.TestCase):
 
         self.assertIn("SO-5001 for C-10", answer)
         self.assertNotIn("for customer", answer)
+
+    def test_llm_answer_uses_openai_client_with_rules_context(self) -> None:
+        client = FakeLLMClient()
+
+        answer = ai_copilot.answer_question_with_llm("What needs attention?", self.data, erp_core, client)
+
+        self.assertEqual("LLM-backed ERP answer", answer)
+        self.assertIn("read-only ERP copilot", client.instructions)
+        self.assertIn("deterministic_rules_answer", client.input_text)
+        self.assertIn("Low stock", client.input_text)
 
 
 if __name__ == "__main__":

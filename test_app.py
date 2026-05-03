@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import app
 
@@ -15,7 +16,8 @@ class AppHelperTests(unittest.TestCase):
             app.parse_content_length("-1")
 
     def test_ask_erp_prefers_core_seed_for_stock_answers(self) -> None:
-        answer = app.ask_erp("What stock is at risk?", app.load_dashboard_data())
+        with patch.object(app.AI_COPILOT, "llm_enabled", return_value=False):
+            answer = app.ask_erp("What stock is at risk?", app.load_dashboard_data())
 
         self.assertIn("PUMP-A", answer)
         self.assertIn("SENSOR-T", answer)
