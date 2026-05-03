@@ -445,8 +445,12 @@ def log_event(event: str, **fields: Any) -> None:
 
 
 def run_erp_command(command: str) -> str:
+    return run_erp_command_response(command)[1]
+
+
+def run_erp_command_response(command: str) -> tuple[int, str]:
     if ADAPTIVE_ERP is None or ERP_STATE is None:
-        return "ERP command engine is unavailable."
+        return 503, "ERP command engine is unavailable."
 
     def mutate(data: Any) -> tuple[Any, Any]:
         return ADAPTIVE_ERP.execute_goal(command, data)
@@ -455,25 +459,33 @@ def run_erp_command(command: str) -> str:
         mutate,
         lambda item: item.message if item.changed else None,
     )
-    return result.message
+    return (200 if result.success else 400), result.message
 
 
 def preview_erp_command(command: str) -> str:
+    return preview_erp_command_response(command)[1]
+
+
+def preview_erp_command_response(command: str) -> tuple[int, str]:
     if ADAPTIVE_ERP is None or ERP_STATE is None:
-        return "ERP command preview is unavailable."
+        return 503, "ERP command preview is unavailable."
     data = current_erp_data()
     result = ADAPTIVE_ERP.preview_goal(command, data)
-    return result.message
+    return (200 if result.success else 400), result.message
 
 
 def run_quick_action(params: dict[str, list[str]]) -> str:
+    return run_quick_action_response(params)[1]
+
+
+def run_quick_action_response(params: dict[str, list[str]]) -> tuple[int, str]:
     if ERP_CORE is None or ERP_STATE is None:
-        return "ERP action engine is unavailable."
+        return 503, "ERP action engine is unavailable."
 
     action = params.get("action", [""])[0]
     try:
         if action not in {"create_po", "receive_po", "pay_invoice", "reset"}:
-            return "Unknown ERP action."
+            return 400, "Unknown ERP action."
 
         def mutate(data: Any) -> tuple[Any, str]:
             if action == "create_po":
@@ -494,9 +506,9 @@ def run_quick_action(params: dict[str, list[str]]) -> str:
 
         _, message = ERP_STATE.update_data_with_audit(mutate, lambda item: item)
     except (TypeError, ValueError) as exc:
-        return str(exc)
+        return 400, str(exc)
 
-    return message
+    return 200, message
 
 
 def ask_erp(question: str, data: dict[str, Any]) -> str:
@@ -828,13 +840,13 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/command":
             command = params.get("command", [""])[0]
             if params.get("mode", ["run"])[0] == "preview":
-                message = preview_erp_command(command)
+                status, message = preview_erp_command_response(command)
             else:
-                message = run_erp_command(command)
-            self.respond(200, render_page(notice=message), "text/html; charset=utf-8")
+                status, message = run_erp_command_response(command)
+            self.respond(status, render_page(notice=message), "text/html; charset=utf-8")
             return
-        message = run_quick_action(params)
-        self.respond(200, render_page(notice=message), "text/html; charset=utf-8")
+        status, message = run_quick_action_response(params)
+        self.respond(status, render_page(notice=message), "text/html; charset=utf-8")
 
     def respond(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)

@@ -232,6 +232,40 @@ class AppHTTPTests(unittest.TestCase):
         self.assertIn('value="preview"', html)
         self.assertIn('value="run"', html)
 
+    def test_invalid_quick_action_returns_bad_request_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=True):
+                with LiveERPServer() as server:
+                    status, content_type, body = server.request(
+                        "POST",
+                        "/action",
+                        body="action=missing",
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    )
+
+        self.assertEqual(400, status)
+        self.assertIn("text/html", content_type)
+        self.assertIn("Unknown ERP action.", body.decode("utf-8"))
+
+    def test_unknown_command_returns_bad_request_page_without_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=True):
+                with LiveERPServer() as server:
+                    status, content_type, body = server.request(
+                        "POST",
+                        "/command",
+                        body="command=make+the+business+better&mode=run",
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    )
+                audit = erp_state.load_audit(db_path)
+
+        self.assertEqual(400, status)
+        self.assertIn("text/html", content_type)
+        self.assertIn("Try commands like", body.decode("utf-8"))
+        self.assertEqual([], audit)
+
 
 if __name__ == "__main__":
     unittest.main()
