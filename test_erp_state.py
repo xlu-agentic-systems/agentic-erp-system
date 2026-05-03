@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 import adaptive_erp
 import erp_core
@@ -138,7 +139,7 @@ class ERPStatePersistenceTests(unittest.TestCase):
     def test_sqlite_storage_status_runs_write_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "erp.sqlite3"
-            with unittest.mock.patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=False):
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=False):
                 status = erp_state.storage_status(write_probe=True)
 
         self.assertEqual("sqlite", status["backend"])
@@ -171,6 +172,72 @@ class ERPStatePersistenceTests(unittest.TestCase):
         self.assertEqual("open", po.status)
         self.assertEqual(14, inventory.quantity_on_hand)
         self.assertEqual([], audit)
+
+    def test_concurrent_sqlite_receive_same_purchase_order_only_posts_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            erp_state.reset_data(db_path)
+
+            def receive(_: int) -> str:
+                def mutate(data: erp_core.ERPData) -> tuple[erp_core.ERPData, str]:
+                    updated, po = erp_core.receive_purchase_order(data, "PO-1001")
+                    time.sleep(0.01)
+                    return updated, f"Received {po.id}"
+
+                try:
+                    _, message = erp_state.update_data_with_audit(mutate, lambda item: item, db_path)
+                    return message
+                except ValueError as exc:
+                    return str(exc)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                messages = sorted(executor.map(receive, range(2)))
+
+            loaded = erp_state.load_data(db_path)
+            audit = erp_state.load_audit(db_path)
+
+        received = next(po for po in loaded.purchase_orders if po.id == "PO-1001")
+        inventory = next(item for item in loaded.inventory if item.product_id == "P-200")
+        self.assertEqual(["PO-1001 is already received", "Received PO-1001"], messages)
+        self.assertEqual("received", received.status)
+        self.assertEqual(26, inventory.quantity_on_hand)
+        self.assertEqual(["Received PO-1001"], [entry["message"] for entry in audit])
+
+    def test_concurrent_sqlite_invoice_payments_cannot_overpay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            erp_state.reset_data(db_path)
+
+            def pay(_: int) -> str:
+                def mutate(data: erp_core.ERPData) -> tuple[erp_core.ERPData, str]:
+                    updated, invoice = erp_core.apply_invoice_payment(data, "INV-9001", "1000.00")
+                    time.sleep(0.01)
+                    return updated, f"Recorded payment for {invoice.id}; balance is {invoice.balance_due}."
+
+                try:
+                    _, message = erp_state.update_data_with_audit(mutate, lambda item: item, db_path)
+                    return message
+                except ValueError as exc:
+                    return str(exc)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                messages = sorted(executor.map(pay, range(2)))
+
+            loaded = erp_state.load_data(db_path)
+            audit = erp_state.load_audit(db_path)
+
+        invoice = next(invoice for invoice in loaded.invoices if invoice.id == "INV-9001")
+        self.assertEqual(
+            [
+                "Recorded payment for INV-9001; balance is 500.00.",
+                "payment amount cannot exceed invoice balance",
+            ],
+            messages,
+        )
+        self.assertEqual("open", invoice.status)
+        self.assertEqual("500.00", str(invoice.balance_due))
+        self.assertEqual("13500.00", str(loaded.current_cash))
+        self.assertEqual(["Recorded payment for INV-9001; balance is 500.00."], [entry["message"] for entry in audit])
 
 
 if __name__ == "__main__":
