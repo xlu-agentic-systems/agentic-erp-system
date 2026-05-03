@@ -69,6 +69,8 @@ Operational checks:
 - `GET /readyz` verifies that ERP modules load, storage can be read, and the configured storage backend accepts a write probe.
 - `GET /metrics` returns in-process request counts by HTTP status.
 
+React Native clients should use the JSON API under `/api/v1`, including `GET /api/v1/dashboard`, `POST /api/v1/ask`, `POST /api/v1/command/preview`, `POST /api/v1/command/run`, and `POST /api/v1/actions`.
+
 Run the local smoke test with:
 
 ```bash

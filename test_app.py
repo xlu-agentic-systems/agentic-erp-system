@@ -271,6 +271,100 @@ class AppHTTPTests(unittest.TestCase):
         self.assertIn("Try commands like", body.decode("utf-8"))
         self.assertEqual([], audit)
 
+    def test_api_dashboard_returns_json_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=True):
+                with LiveERPServer() as server:
+                    status, content_type, body = server.request("GET", "/api/v1/dashboard")
+
+        payload = json.loads(body)
+        self.assertEqual(200, status)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(payload["ok"])
+        self.assertIsNone(payload["error"])
+        self.assertIn("kpis", payload["data"])
+        self.assertIn("fulfillment_risks", payload["data"])
+        self.assertNotIn("_seed", payload["data"])
+
+    def test_api_command_preview_does_not_mutate_or_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=True):
+                with LiveERPServer() as server:
+                    status, content_type, body = server.request(
+                        "POST",
+                        "/api/v1/command/preview",
+                        body=json.dumps({"command": "receive PO-1001"}),
+                        headers={"Content-Type": "application/json"},
+                    )
+                data = erp_state.load_data(db_path)
+                audit = erp_state.load_audit(db_path)
+
+        payload = json.loads(body)
+        po = next(order for order in data.purchase_orders if order.id == "PO-1001")
+        self.assertEqual(200, status)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["data"]["changed"])
+        self.assertEqual("open", po.status)
+        self.assertEqual([], audit)
+
+    def test_api_command_run_persists_state_and_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=True):
+                with LiveERPServer() as server:
+                    status, _, body = server.request(
+                        "POST",
+                        "/api/v1/command/run",
+                        body=json.dumps({"command": "receive PO-1001"}),
+                        headers={"Content-Type": "application/json"},
+                    )
+                data = erp_state.load_data(db_path)
+                audit = erp_state.load_audit(db_path)
+
+        payload = json.loads(body)
+        po = next(order for order in data.purchase_orders if order.id == "PO-1001")
+        self.assertEqual(200, status)
+        self.assertTrue(payload["ok"])
+        self.assertEqual("received", po.status)
+        self.assertEqual("receive_purchase_order", audit[0]["action"])
+
+    def test_api_invalid_action_returns_error_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=True):
+                with LiveERPServer() as server:
+                    status, content_type, body = server.request(
+                        "POST",
+                        "/api/v1/actions",
+                        body=json.dumps({"action": "missing"}),
+                        headers={"Content-Type": "application/json"},
+                    )
+
+        payload = json.loads(body)
+        self.assertEqual(400, status)
+        self.assertIn("application/json", content_type)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("validation_error", payload["error"]["code"])
+        self.assertEqual("Unknown ERP action.", payload["error"]["message"])
+
+    def test_api_rejects_malformed_json(self) -> None:
+        with LiveERPServer() as server:
+            status, content_type, body = server.request(
+                "POST",
+                "/api/v1/ask",
+                body="{bad json",
+                headers={"Content-Type": "application/json"},
+            )
+
+        payload = json.loads(body)
+        self.assertEqual(400, status)
+        self.assertIn("application/json", content_type)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("bad_json", payload["error"]["code"])
+
 
 if __name__ == "__main__":
     unittest.main()
