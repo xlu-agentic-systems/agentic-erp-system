@@ -109,6 +109,20 @@ class AppHTTPTests(unittest.TestCase):
         self.assertEqual(404, missing_status)
         self.assertEqual(b"Not found", missing_body)
 
+    def test_metrics_endpoint_reports_request_counts(self) -> None:
+        before = app.metrics_payload()["requests_total"]
+        with LiveERPServer() as server:
+            server.request("GET", "/healthz")
+            server.request("GET", "/missing")
+            status, content_type, body = server.request("GET", "/metrics")
+
+        metrics = json.loads(body)
+        self.assertEqual(200, status)
+        self.assertIn("application/json", content_type)
+        self.assertGreaterEqual(metrics["requests_total"], before + 2)
+        self.assertIn("200", metrics["status_counts"])
+        self.assertIn("404", metrics["status_counts"])
+
     def test_post_rejects_oversized_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "erp_state.json"

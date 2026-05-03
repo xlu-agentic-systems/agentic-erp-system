@@ -11,6 +11,8 @@ import importlib
 import inspect
 import json
 import os
+import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,8 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 DEFAULT_MAX_POST_BODY_BYTES = 64 * 1024
+_METRICS_LOCK = threading.Lock()
+_METRICS: dict[str, Any] = {"requests_total": 0, "status_counts": {}}
 
 
 class RequestTooLarge(ValueError):
@@ -418,6 +422,31 @@ def json_response(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
 
 
+def metrics_payload() -> dict[str, Any]:
+    with _METRICS_LOCK:
+        return {
+            "requests_total": _METRICS["requests_total"],
+            "status_counts": dict(_METRICS["status_counts"]),
+        }
+
+
+def record_response(status: int) -> None:
+    status_key = str(status)
+    with _METRICS_LOCK:
+        _METRICS["requests_total"] = int(_METRICS["requests_total"]) + 1
+        status_counts = _METRICS["status_counts"]
+        status_counts[status_key] = int(status_counts.get(status_key, 0)) + 1
+
+
+def log_event(event: str, **fields: Any) -> None:
+    payload = {
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **fields,
+    }
+    print(json.dumps(payload, default=str, sort_keys=True))
+
+
 def run_erp_command(command: str) -> str:
     if ADAPTIVE_ERP is None or ERP_STATE is None:
         return "ERP command engine is unavailable."
@@ -769,6 +798,9 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
             status, payload = readiness_payload()
             self.respond(status, json_response(payload), "application/json; charset=utf-8")
             return
+        if self.path == "/metrics":
+            self.respond(200, json_response(metrics_payload()), "application/json; charset=utf-8")
+            return
         if self.path == "/static/styles.css":
             css_path = STATIC_DIR / "styles.css"
             if css_path.exists():
@@ -810,12 +842,22 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
     def respond(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+        record_response(status)
+        log_event(
+            "http_response",
+            method=self.command,
+            path=self.path,
+            status=status,
+            content_type=content_type,
+            content_length=len(body),
+        )
 
     def log_message(self, format: str, *args: Any) -> None:
-        print(f"{self.address_string()} - {format % args}")
+        return
 
 
 def main() -> None:
