@@ -114,3 +114,18 @@ test('API errors reject with the server message', async () => {
 
   await assert.rejects(client.action({ action: 'missing' }), /Unknown ERP action/);
 });
+
+test('requests time out with an operator-friendly error', async () => {
+  const client = new ERPApiClient({
+    baseUrl: 'http://erp.local',
+    timeoutMs: 1,
+    fetcher: (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      }),
+  });
+
+  await assert.rejects(client.dashboard(), /timed out/);
+});
