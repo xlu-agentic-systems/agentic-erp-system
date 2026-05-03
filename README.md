@@ -60,6 +60,13 @@ Operational checks:
 
 - `GET /healthz` returns process health and app metadata.
 - `GET /readyz` verifies that ERP modules and local state can be loaded.
+- `GET /metrics` returns in-process request counts by HTTP status.
+
+Run the local smoke test with:
+
+```bash
+python3 scripts/smoke_test.py
+```
 
 ## Optional LLM Mode
 
