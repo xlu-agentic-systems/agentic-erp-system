@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -30,6 +30,10 @@ _METRICS: dict[str, Any] = {"requests_total": 0, "status_counts": {}}
 
 
 class RequestTooLarge(ValueError):
+    pass
+
+
+class BadJSONRequest(ValueError):
     pass
 
 
@@ -419,6 +423,74 @@ def json_response(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
 
 
+def api_success(data: Any) -> dict[str, Any]:
+    return {"ok": True, "data": data, "error": None}
+
+
+def api_error(code: str, message: str) -> dict[str, Any]:
+    return {"ok": False, "data": None, "error": {"code": code, "message": message}}
+
+
+def api_json_response(status: int, payload: dict[str, Any]) -> tuple[int, bytes, str]:
+    return status, json_response(payload), "application/json; charset=utf-8"
+
+
+def jsonable(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): jsonable(item) for key, item in value.items() if str(key) != "_seed"}
+    return str(value)
+
+
+def public_dashboard_data() -> dict[str, Any]:
+    return jsonable({key: value for key, value in load_dashboard_data().items() if key != "_seed"})
+
+
+def parse_json_body(body: str) -> dict[str, Any]:
+    if not body.strip():
+        return {}
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise BadJSONRequest("Malformed JSON body") from exc
+    if not isinstance(payload, dict):
+        raise BadJSONRequest("JSON body must be an object")
+    return payload
+
+
+def list_params(payload: dict[str, Any]) -> dict[str, list[str]]:
+    params: dict[str, list[str]] = {}
+    for key, value in payload.items():
+        if isinstance(value, list):
+            params[str(key)] = [text(item) for item in value]
+        elif value is None:
+            params[str(key)] = [""]
+        else:
+            params[str(key)] = [text(value)]
+    return params
+
+
+def api_status_code(status: int) -> int:
+    if status == 400:
+        return 400
+    if status == 503:
+        return 503
+    return 200
+
+
+def api_error_code(status: int) -> str:
+    if status == 400:
+        return "validation_error"
+    if status == 503:
+        return "service_unavailable"
+    return "error"
+
+
 def metrics_payload() -> dict[str, Any]:
     with _METRICS_LOCK:
         return {
@@ -533,6 +605,46 @@ def quick_action_entity(action: str, params: dict[str, list[str]]) -> str:
     if action == "pay_invoice":
         return params.get("invoice_id", [""])[0]
     return action
+
+
+def handle_api_get(path: str) -> tuple[int, bytes, str] | None:
+    route = urlparse(path).path
+    if route == "/api/v1/dashboard":
+        return api_json_response(200, api_success(public_dashboard_data()))
+    if route == "/api/v1/health":
+        return api_json_response(200, api_success(health_payload()))
+    if route == "/api/v1/ready":
+        status, payload = readiness_payload()
+        return api_json_response(status, api_success(payload) if status == 200 else api_error("not_ready", payload["status"]))
+    if route == "/api/v1/metrics":
+        return api_json_response(200, api_success(metrics_payload()))
+    return None
+
+
+def handle_api_post(path: str, payload: dict[str, Any]) -> tuple[int, bytes, str] | None:
+    route = urlparse(path).path
+    if route == "/api/v1/ask":
+        question = text(payload.get("question", ""))
+        answer = ask_erp(question, load_dashboard_data())
+        return api_json_response(200, api_success({"question": question, "answer": answer}))
+    if route == "/api/v1/command/preview":
+        command = text(payload.get("command", ""))
+        status, message = preview_erp_command_response(command)
+        if status != 200:
+            return api_json_response(api_status_code(status), api_error(api_error_code(status), message))
+        return api_json_response(200, api_success({"command": command, "message": message, "changed": False}))
+    if route == "/api/v1/command/run":
+        command = text(payload.get("command", ""))
+        status, message = run_erp_command_response(command)
+        if status != 200:
+            return api_json_response(api_status_code(status), api_error(api_error_code(status), message))
+        return api_json_response(200, api_success({"command": command, "message": message}))
+    if route == "/api/v1/actions":
+        status, message = run_quick_action_response(list_params(payload))
+        if status != 200:
+            return api_json_response(api_status_code(status), api_error(api_error_code(status), message))
+        return api_json_response(200, api_success({"message": message, "dashboard": public_dashboard_data()}))
+    return None
 
 
 def ask_erp(question: str, data: dict[str, Any]) -> str:
@@ -821,6 +933,11 @@ def render_page(question: str = "", answer: str = "", notice: str = "") -> bytes
 
 class ERPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
+        api_result = handle_api_get(self.path)
+        if api_result is not None:
+            status, body, content_type = api_result
+            self.respond(status, body, content_type)
+            return
         if self.path == "/" or self.path.startswith("/?"):
             self.respond(200, render_page(), "text/html; charset=utf-8")
             return
@@ -844,6 +961,28 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
         self.respond(404, b"Not found", "text/plain; charset=utf-8")
 
     def do_POST(self) -> None:
+        if urlparse(self.path).path.startswith("/api/v1/"):
+            try:
+                length = parse_content_length(self.headers.get("Content-Length", "0"), max_post_body_bytes())
+            except RequestTooLarge:
+                self.respond(413, json_response(api_error("request_too_large", "Request body too large")), "application/json; charset=utf-8")
+                return
+            except ValueError:
+                self.respond(400, json_response(api_error("bad_content_length", "Invalid Content-Length")), "application/json; charset=utf-8")
+                return
+            body = self.rfile.read(length).decode("utf-8", errors="replace")
+            try:
+                payload = parse_json_body(body)
+            except BadJSONRequest as exc:
+                self.respond(400, json_response(api_error("bad_json", str(exc))), "application/json; charset=utf-8")
+                return
+            api_result = handle_api_post(self.path, payload)
+            if api_result is None:
+                self.respond(404, json_response(api_error("not_found", "Not found")), "application/json; charset=utf-8")
+                return
+            status, response_body, content_type = api_result
+            self.respond(status, response_body, content_type)
+            return
         if self.path not in {"/ask", "/command", "/action"}:
             self.respond(404, b"Not found", "text/plain; charset=utf-8")
             return
