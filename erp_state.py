@@ -133,6 +133,19 @@ def storage_status(write_probe: bool = False) -> dict[str, Any]:
     return _json_storage_status(write_probe)
 
 
+def backup_sqlite(backup_path: str | Path, source_path: str | Path | None = None) -> Path:
+    source = Path(source_path) if source_path is not None else db_path()
+    target = Path(backup_path)
+    if source.resolve() == target.resolve():
+        raise ValueError("backup path must be different from source path")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with _connect_sqlite(source) as source_connection:
+        _ensure_sqlite_schema(source_connection)
+        with sqlite3.connect(target) as backup_connection:
+            source_connection.backup(backup_connection)
+    return target
+
+
 def _load_data_json(path: str | Path | None = None) -> erp_core.ERPData:
     global _LAST_RECOVERY
     target = Path(path) if path is not None else state_path()

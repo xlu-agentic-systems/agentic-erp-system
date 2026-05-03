@@ -75,6 +75,12 @@ Run the local smoke test with:
 python3 scripts/smoke_test.py
 ```
 
+Create an operational SQLite backup with:
+
+```bash
+python3 scripts/backup_sqlite.py data/erp.backup.sqlite3
+```
+
 ## Optional LLM Mode
 
 The app uses deterministic rules by default. If `.env` or the shell environment provides `OPENAI_API_KEY`, the Ask ERP panel calls the OpenAI Responses API and gives the model only a read-only, JSON summary of the ERP snapshot and the deterministic rules answer.
