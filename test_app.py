@@ -177,6 +177,32 @@ class AppHTTPTests(unittest.TestCase):
         self.assertEqual("open", invoice.status)
         self.assertEqual("1000.00", str(invoice.balance_due))
 
+    def test_command_preview_does_not_persist_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "erp_state.json"
+            audit_path = Path(tmp) / "audit.jsonl"
+            env = {"ERP_STATE_PATH": str(state_path), "ERP_AUDIT_PATH": str(audit_path)}
+            with patch.dict(os.environ, env):
+                message = app.preview_erp_command("receive PO-1001")
+                data = erp_state.load_data(state_path)
+                audit_exists = audit_path.exists()
+
+        po = next(order for order in data.purchase_orders if order.id == "PO-1001")
+        self.assertIn("Preview: receive PO-1001", message)
+        self.assertEqual("open", po.status)
+        self.assertFalse(audit_exists)
+
+    def test_command_form_renders_preview_and_run_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "erp_state.json"
+            audit_path = Path(tmp) / "audit.jsonl"
+            env = {"ERP_STATE_PATH": str(state_path), "ERP_AUDIT_PATH": str(audit_path)}
+            with patch.dict(os.environ, env):
+                html = app.render_page().decode("utf-8")
+
+        self.assertIn('value="preview"', html)
+        self.assertIn('value="run"', html)
+
 
 if __name__ == "__main__":
     unittest.main()

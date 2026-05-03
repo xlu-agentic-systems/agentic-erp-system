@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 import re
 
 import erp_core
@@ -28,6 +28,8 @@ def execute_goal(goal: str, data: erp_core.ERPData, as_of: date | None = None) -
     normalized = goal.strip()
     if not normalized:
         return data, _no_match()
+    if _looks_negated(normalized):
+        return data, _negated_command()
 
     try:
         if _looks_like_receive_po(normalized):
@@ -54,6 +56,55 @@ def execute_goal(goal: str, data: erp_core.ERPData, as_of: date | None = None) -
     return data, _no_match()
 
 
+def preview_goal(goal: str, data: erp_core.ERPData, as_of: date | None = None) -> AdaptiveResult:
+    """Return the deterministic action that would run without mutating ERP data."""
+
+    as_of = as_of or date.today()
+    normalized = goal.strip()
+    if not normalized:
+        return _no_match()
+    if _looks_negated(normalized):
+        return _negated_command()
+
+    try:
+        if _looks_like_receive_po(normalized):
+            po = _find_purchase_order(data, _extract_document_id(normalized, "PO"))
+            if erp_core.status_key(po.status) == "received":
+                raise ValueError(f"{po.id} is already received")
+            quantity = sum(line.quantity for line in po.lines)
+            return AdaptiveResult(True, False, "receive_purchase_order", f"Preview: receive {po.id} and add {quantity} inventory unit(s).")
+
+        if _looks_like_invoice_payment(normalized):
+            invoice = _find_invoice(data, _extract_document_id(normalized, "INV"))
+            if invoice.balance_due <= 0 or erp_core.status_key(invoice.status) == "paid":
+                raise ValueError(f"{invoice.id} is already paid")
+            amount_raw = _extract_payment_amount(normalized)
+            payment = invoice.balance_due if amount_raw is None else erp_core.money(amount_raw)
+            if payment <= 0:
+                raise ValueError("payment amount must be positive")
+            if payment > invoice.balance_due:
+                raise ValueError("payment amount cannot exceed invoice balance")
+            projected_balance = invoice.balance_due - payment
+            return AdaptiveResult(True, False, "record_invoice_payment", f"Preview: record payment of {payment} for {invoice.id}; balance would be {projected_balance}.")
+
+        if _looks_like_create_po(normalized):
+            reference = _extract_product_reference(normalized, data)
+            product = erp_core.find_product(data, reference)
+            if product is None:
+                raise ValueError(f"Unknown product: {reference}")
+            quantity = _extract_quantity(normalized) or erp_core.reorder_quantity(data, product)
+            if quantity <= 0:
+                raise ValueError("quantity must be positive")
+            vendor = erp_core.find_vendor_for_product(data, product)
+            po_id = erp_core.next_document_id((po.id for po in data.purchase_orders), "PO")
+            expected_date = as_of + timedelta(days=vendor.lead_time_days)
+            return AdaptiveResult(True, False, "create_purchase_order", f"Preview: create {po_id} for {product.sku} with {quantity} units from {vendor.name} expected on {expected_date}.")
+    except ValueError as exc:
+        return AdaptiveResult(False, False, "error", str(exc))
+
+    return _no_match()
+
+
 def _no_match() -> AdaptiveResult:
     return AdaptiveResult(
         success=False,
@@ -61,6 +112,20 @@ def _no_match() -> AdaptiveResult:
         action="unknown",
         message="Try commands like 'reorder PUMP-A', 'receive PO-1001', or 'mark INV-9001 paid'.",
     )
+
+
+def _negated_command() -> AdaptiveResult:
+    return AdaptiveResult(
+        success=False,
+        changed=False,
+        action="negated",
+        message="No action taken because the command appears to be negated.",
+    )
+
+
+def _looks_negated(text: str) -> bool:
+    q = text.lower()
+    return any(phrase in q for phrase in ("don't ", "do not ", "dont ", "never "))
 
 
 def _looks_like_create_po(text: str) -> bool:
@@ -111,6 +176,22 @@ def _extract_payment_amount(text: str) -> str | None:
     cleaned = re.sub(r"\bINV\s*-?\s*\d+\b", "", text, flags=re.IGNORECASE)
     match = re.search(r"(?:\$|usd\s*)?(\d+(?:\.\d{1,2})?)\b", cleaned, flags=re.IGNORECASE)
     return match.group(1) if match else None
+
+
+def _find_purchase_order(data: erp_core.ERPData, purchase_order_id: str) -> erp_core.PurchaseOrder:
+    wanted = erp_core.normalize_document_id(purchase_order_id, "PO")
+    for po in data.purchase_orders:
+        if _search_key(po.id) == _search_key(wanted):
+            return po
+    raise ValueError(f"Unknown purchase order: {purchase_order_id}")
+
+
+def _find_invoice(data: erp_core.ERPData, invoice_id: str) -> erp_core.Invoice:
+    wanted = erp_core.normalize_document_id(invoice_id, "INV")
+    for invoice in data.invoices:
+        if _search_key(invoice.id) == _search_key(wanted):
+            return invoice
+    raise ValueError(f"Unknown invoice: {invoice_id}")
 
 
 def _extract_product_reference(text: str, data: erp_core.ERPData) -> str:

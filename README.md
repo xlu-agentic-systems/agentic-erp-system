@@ -46,12 +46,13 @@ Copilot behavior is intentionally read-only. It explains, prioritizes, and recom
 
 ## Usable MVP Workflows
 
-The dashboard includes a `Command ERP` panel and quick-action buttons. Supported deterministic commands include:
+The dashboard includes a `Command ERP` panel and quick-action buttons. Commands can be previewed before execution, and supported deterministic commands include:
 
 - `reorder PUMP-A`
 - `create a purchase order for Sensor T`
 - `receive PO-1001`
 - `mark INV-9001 paid`
+- `record $500 payment for INV-9001`
 
 Workflow changes are saved to `data/erp_state.json`, and the activity log is saved to `data/audit.jsonl`. Both files are ignored by git.
 
