@@ -33,6 +33,8 @@ def load_optional_module(name: str) -> Any | None:
 
 ERP_CORE = load_optional_module("erp_core")
 AI_COPILOT = load_optional_module("ai_copilot")
+ADAPTIVE_ERP = load_optional_module("adaptive_erp")
+ERP_STATE = load_optional_module("erp_state")
 
 
 def callable_accepts(func: Any, *args: Any) -> bool:
@@ -114,6 +116,12 @@ def pick(record: Any, *keys: str, fallback: Any = "") -> Any:
 
 def seeded_data() -> Any | None:
     return call_first(ERP_CORE, ("seed_erp_data", "sample_data", "get_seed_data"))
+
+
+def current_erp_data() -> Any | None:
+    if ERP_STATE is not None:
+        return ERP_STATE.load_data()
+    return seeded_data()
 
 
 def resolve_name(records: Any, record_id: Any) -> str:
@@ -336,35 +344,67 @@ def normalize_roles(value: Any) -> list[dict[str, str]]:
 
 
 def load_dashboard_data() -> dict[str, Any]:
-    snapshot = call_first(ERP_CORE, ("get_dashboard_data", "dashboard_data", "get_dashboard", "dashboard"))
-    if isinstance(snapshot, dict):
-        base = {**FALLBACK_DATA, **snapshot}
+    state_data = current_erp_data()
+    if ERP_CORE is not None and state_data is not None and callable(getattr(ERP_CORE, "build_dashboard_data", None)):
+        base = {**FALLBACK_DATA, **ERP_CORE.build_dashboard_data(state_data), "_seed": state_data}
     elif ERP_CORE is not None:
-        seed = seeded_data()
-        base = {**FALLBACK_DATA, **build_seed_dashboard(seed)} if seed is not None else dict(FALLBACK_DATA)
+        base = {**FALLBACK_DATA, **build_seed_dashboard(state_data)} if state_data is not None else dict(FALLBACK_DATA)
     else:
-        base = dict(FALLBACK_DATA)
+        snapshot = call_first(ERP_CORE, ("get_dashboard_data", "dashboard_data", "get_dashboard", "dashboard"))
+        base = {**FALLBACK_DATA, **snapshot} if isinstance(snapshot, dict) else dict(FALLBACK_DATA)
 
-    base["kpis"] = normalize_kpis(
-        call_first(ERP_CORE, ("get_kpis", "kpis", "calculate_kpis")) or base.get("kpis")
-    )
-    base["risk_flags"] = normalize_risks(
-        call_first(ERP_CORE, ("get_risk_flags", "risk_flags", "get_risks")) or base.get("risk_flags")
-    )
-    base["roles"] = normalize_roles(
-        call_first(ERP_CORE, ("get_role_summaries", "role_summaries", "get_roles")) or base.get("roles")
-    )
-
-    for key, names in {
-        "inventory": ("get_inventory", "inventory", "list_inventory"),
-        "sales_orders": ("get_sales_orders", "sales_orders", "list_sales_orders"),
-        "purchase_orders": ("get_purchase_orders", "purchase_orders", "list_purchase_orders"),
-        "invoices": ("get_invoices", "invoices", "list_invoices"),
-    }.items():
-        records = as_list(call_first(ERP_CORE, names) or base.get(key))
-        base[key] = records or FALLBACK_DATA[key]
+    base["kpis"] = normalize_kpis(base.get("kpis"))
+    base["risk_flags"] = normalize_risks(base.get("risk_flags"))
+    base["roles"] = normalize_roles(base.get("roles"))
+    for key in ("inventory", "sales_orders", "purchase_orders", "invoices"):
+        base[key] = as_list(base.get(key)) or FALLBACK_DATA[key]
+    base["audit_log"] = ERP_STATE.load_audit() if ERP_STATE is not None else []
 
     return base
+
+
+def run_erp_command(command: str) -> str:
+    if ADAPTIVE_ERP is None or ERP_STATE is None:
+        return "ERP command engine is unavailable."
+    data = current_erp_data()
+    updated, result = ADAPTIVE_ERP.execute_goal(command, data)
+    if result.changed:
+        ERP_STATE.save_data(updated)
+        ERP_STATE.append_audit(result.message)
+    return result.message
+
+
+def run_quick_action(params: dict[str, list[str]]) -> str:
+    if ERP_CORE is None or ERP_STATE is None:
+        return "ERP action engine is unavailable."
+
+    action = params.get("action", [""])[0]
+    data = current_erp_data()
+    try:
+        if action == "create_po":
+            sku = params.get("sku", [""])[0]
+            quantity = int(params.get("quantity", ["0"])[0])
+            updated, po = ERP_CORE.create_purchase_order(data, sku, quantity)
+            message = f"Created {po.id} for {sku} with {po.lines[0].quantity} units."
+        elif action == "receive_po":
+            po_id = params.get("po_id", [""])[0]
+            updated, po = ERP_CORE.receive_purchase_order(data, po_id)
+            message = f"Received {po.id}; inventory is updated."
+        elif action == "pay_invoice":
+            invoice_id = params.get("invoice_id", [""])[0]
+            updated, invoice = ERP_CORE.apply_invoice_payment(data, invoice_id)
+            message = f"Recorded payment for {invoice.id}; balance is {invoice.balance_due}."
+        elif action == "reset":
+            updated = ERP_STATE.reset_data()
+            message = "Reset ERP demo data."
+        else:
+            return "Unknown ERP action."
+    except (TypeError, ValueError) as exc:
+        return str(exc)
+
+    ERP_STATE.save_data(updated)
+    ERP_STATE.append_audit(message)
+    return message
 
 
 def ask_erp(question: str, data: dict[str, Any]) -> str:
@@ -460,6 +500,66 @@ def render_roles(roles: list[dict[str, str]]) -> str:
     )
 
 
+def render_audit(entries: list[dict[str, str]]) -> str:
+    if not entries:
+        return "<li><span>No workflow activity yet.</span></li>"
+    return "".join(
+        f"""
+        <li>
+            <strong>{esc(entry.get("timestamp", ""))}</strong>
+            <span>{esc(entry.get("message", ""))}</span>
+        </li>
+        """
+        for entry in entries
+    )
+
+
+def render_quick_actions(erp_data: Any) -> str:
+    if erp_data is None or ERP_CORE is None:
+        return "<p class=\"muted-copy\">ERP actions are unavailable.</p>"
+
+    recommendation_forms = ""
+    if AI_COPILOT is not None:
+        for rec in AI_COPILOT.reorder_recommendations(erp_data, ERP_CORE)[:3]:
+            recommendation_forms += f"""
+            <form method="post" action="/action" class="inline-action">
+                <input type="hidden" name="action" value="create_po">
+                <input type="hidden" name="sku" value="{esc(rec["sku"])}">
+                <input type="hidden" name="quantity" value="{esc(rec["quantity"])}">
+                <button type="submit">Create PO for {esc(rec["sku"])} ({esc(rec["quantity"])} units)</button>
+            </form>
+            """
+
+    receive_forms = "".join(
+        f"""
+        <form method="post" action="/action" class="inline-action">
+            <input type="hidden" name="action" value="receive_po">
+            <input type="hidden" name="po_id" value="{esc(po.id)}">
+            <button type="submit">Receive {esc(po.id)}</button>
+        </form>
+        """
+        for po in ERP_CORE.delayed_purchase_orders(erp_data)[:2]
+    )
+    payment_forms = "".join(
+        f"""
+        <form method="post" action="/action" class="inline-action">
+            <input type="hidden" name="action" value="pay_invoice">
+            <input type="hidden" name="invoice_id" value="{esc(invoice.id)}">
+            <button type="submit">Record payment for {esc(invoice.id)}</button>
+        </form>
+        """
+        for invoice in ERP_CORE.overdue_invoices(erp_data)[:2]
+    )
+    reset_form = """
+        <form method="post" action="/action" class="inline-action reset-action">
+            <input type="hidden" name="action" value="reset">
+            <button type="submit">Reset demo data</button>
+        </form>
+    """
+    forms = recommendation_forms + receive_forms + payment_forms + reset_form
+    return forms or "<p class=\"muted-copy\">No recommended workflow actions right now.</p>"
+
+
 def render_table(title: str, records: list[Any], columns: tuple[tuple[str, str], ...]) -> str:
     header = "".join(f"<th>{esc(label)}</th>" for _, label in columns)
     rows = []
@@ -490,11 +590,12 @@ def render_table(title: str, records: list[Any], columns: tuple[tuple[str, str],
     """
 
 
-def render_page(question: str = "", answer: str = "") -> bytes:
+def render_page(question: str = "", answer: str = "", notice: str = "") -> bytes:
     data = load_dashboard_data()
     if question and not answer:
         answer = ask_erp(question, data)
     llm_state = "LLM enabled" if AI_COPILOT and getattr(AI_COPILOT, "llm_enabled", lambda: False)() else "rules fallback"
+    notice_html = f'<div class="notice">{esc(notice)}</div>' if notice else ""
 
     html_doc = f"""<!doctype html>
 <html lang="en">
@@ -514,6 +615,7 @@ def render_page(question: str = "", answer: str = "") -> bytes:
     </header>
 
     <main>
+        {notice_html}
         <section class="kpi-grid" aria-label="ERP KPIs">
             {render_kpis(data["kpis"])}
         </section>
@@ -545,6 +647,32 @@ def render_page(question: str = "", answer: str = "") -> bytes:
             </form>
         </section>
 
+        <section class="workflow-grid">
+            <form class="command-panel" method="post" action="/command">
+                <div class="section-heading">
+                    <h2>Command ERP</h2>
+                    <span>Workflow</span>
+                </div>
+                <label for="command">Command</label>
+                <textarea id="command" name="command" rows="3" placeholder="Try: reorder PUMP-A, receive PO-1001, or mark INV-9001 paid"></textarea>
+                <button type="submit">Run Command</button>
+            </form>
+            <div class="panel">
+                <div class="section-heading">
+                    <h2>Quick Actions</h2>
+                    <span>Suggested</span>
+                </div>
+                <div class="action-list">{render_quick_actions(data.get("_seed"))}</div>
+            </div>
+            <div class="panel">
+                <div class="section-heading">
+                    <h2>Activity</h2>
+                    <span>Latest</span>
+                </div>
+                <ul class="role-list">{render_audit(data.get("audit_log", []))}</ul>
+            </div>
+        </section>
+
         <section class="tables-grid">
             {render_table("Inventory", data["inventory"], (("sku", "SKU"), ("item", "Item"), ("stock", "Stock"), ("status", "Status")))}
             {render_table("Sales Orders", data["sales_orders"], (("id", "Order"), ("customer", "Customer"), ("total", "Total"), ("status", "Status")))}
@@ -572,7 +700,7 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
         self.respond(404, b"Not found", "text/plain; charset=utf-8")
 
     def do_POST(self) -> None:
-        if self.path != "/ask":
+        if self.path not in {"/ask", "/command", "/action"}:
             self.respond(404, b"Not found", "text/plain; charset=utf-8")
             return
         try:
@@ -581,8 +709,17 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
             self.respond(400, b"Invalid Content-Length", "text/plain; charset=utf-8")
             return
         body = self.rfile.read(length).decode("utf-8", errors="replace")
-        question = parse_qs(body).get("question", [""])[0]
-        self.respond(200, render_page(question=question), "text/html; charset=utf-8")
+        params = parse_qs(body)
+        if self.path == "/ask":
+            question = params.get("question", [""])[0]
+            self.respond(200, render_page(question=question), "text/html; charset=utf-8")
+            return
+        if self.path == "/command":
+            message = run_erp_command(params.get("command", [""])[0])
+            self.respond(200, render_page(notice=message), "text/html; charset=utf-8")
+            return
+        message = run_quick_action(params)
+        self.respond(200, render_page(notice=message), "text/html; charset=utf-8")
 
     def respond(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
