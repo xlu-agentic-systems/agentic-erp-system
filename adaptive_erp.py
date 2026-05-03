@@ -37,8 +37,10 @@ def execute_goal(goal: str, data: erp_core.ERPData, as_of: date | None = None) -
 
         if _looks_like_invoice_payment(normalized):
             invoice_id = _extract_document_id(normalized, "INV")
-            updated, invoice = erp_core.apply_invoice_payment(data, invoice_id, None, as_of)
-            return updated, AdaptiveResult(True, True, "record_invoice_payment", f"Recorded payment for {invoice.id}; balance is {invoice.balance_due}.")
+            amount = _extract_payment_amount(normalized)
+            updated, invoice = erp_core.apply_invoice_payment(data, invoice_id, amount, as_of)
+            amount_text = f" of {erp_core.money(amount)}" if amount is not None else ""
+            return updated, AdaptiveResult(True, True, "record_invoice_payment", f"Recorded payment{amount_text} for {invoice.id}; balance is {invoice.balance_due}.")
 
         if _looks_like_create_po(normalized):
             product = _extract_product_reference(normalized, data)
@@ -103,6 +105,12 @@ def _extract_quantity(text: str) -> int | None:
     cleaned = re.sub(r"\b(?:PO|INV)\s*-?\s*\d+\b", "", text, flags=re.IGNORECASE)
     match = re.search(r"\b(\d+)\b", cleaned)
     return int(match.group(1)) if match else None
+
+
+def _extract_payment_amount(text: str) -> str | None:
+    cleaned = re.sub(r"\bINV\s*-?\s*\d+\b", "", text, flags=re.IGNORECASE)
+    match = re.search(r"(?:\$|usd\s*)?(\d+(?:\.\d{1,2})?)\b", cleaned, flags=re.IGNORECASE)
+    return match.group(1) if match else None
 
 
 def _extract_product_reference(text: str, data: erp_core.ERPData) -> str:

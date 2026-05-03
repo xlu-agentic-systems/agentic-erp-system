@@ -295,6 +295,39 @@ def overdue_invoices(data: ERPData, as_of: date | None = None) -> list[Invoice]:
     ]
 
 
+def invoice_aging_buckets(data: ERPData, as_of: date | None = None) -> list[dict[str, object]]:
+    """Summarize open receivables into common AR aging buckets."""
+
+    as_of = as_of or date.today()
+    bucket_ranges = (
+        ("Current", None, 0),
+        ("1-30", 1, 30),
+        ("31-60", 31, 60),
+        ("61-90", 61, 90),
+        ("90+", 91, None),
+    )
+    buckets = {name: {"bucket": name, "count": 0, "balance": money("0.00")} for name, _, _ in bucket_ranges}
+
+    for invoice in data.invoices:
+        if status_key(invoice.status) == "paid" or invoice.balance_due <= 0:
+            continue
+        days_past_due = (as_of - invoice.due_date).days
+        for name, lower, upper in bucket_ranges:
+            if lower is None and days_past_due <= upper:
+                bucket = buckets[name]
+                break
+            if upper is None and days_past_due >= lower:
+                bucket = buckets[name]
+                break
+            if lower is not None and upper is not None and lower <= days_past_due <= upper:
+                bucket = buckets[name]
+                break
+        bucket["count"] = int(bucket["count"]) + 1
+        bucket["balance"] = bucket["balance"] + invoice.balance_due
+
+    return [buckets[name] for name, _, _ in bucket_ranges]
+
+
 def inventory_value(data: ERPData) -> Money:
     """Total on-hand inventory valued at product unit cost."""
 
@@ -718,6 +751,7 @@ def build_dashboard_data(data: ERPData | None = None, as_of: date | None = None)
         "purchase_orders": purchase_rows,
         "invoices": invoice_rows,
         "fulfillment_risks": fulfillment_risks(data),
+        "ar_aging": invoice_aging_buckets(data, as_of),
     }
 
 
