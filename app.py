@@ -451,9 +451,10 @@ def run_erp_command(command: str) -> str:
     def mutate(data: Any) -> tuple[Any, Any]:
         return ADAPTIVE_ERP.execute_goal(command, data)
 
-    _, result = ERP_STATE.update_data(mutate)
-    if result.changed:
-        ERP_STATE.append_audit(result.message)
+    _, result = ERP_STATE.update_data_with_audit(
+        mutate,
+        lambda item: item.message if item.changed else None,
+    )
     return result.message
 
 
@@ -491,11 +492,10 @@ def run_quick_action(params: dict[str, list[str]]) -> str:
                 return updated, f"Recorded payment for {invoice.id}; balance is {invoice.balance_due}."
             return ERP_CORE.seed_erp_data(), "Reset ERP demo data."
 
-        _, message = ERP_STATE.update_data(mutate)
+        _, message = ERP_STATE.update_data_with_audit(mutate, lambda item: item)
     except (TypeError, ValueError) as exc:
         return str(exc)
 
-    ERP_STATE.append_audit(message)
     return message
 
 
