@@ -62,6 +62,46 @@ test('command preview posts JSON and returns non-mutating result', async () => {
   assert.equal(result.changed, false);
 });
 
+test('ask posts a question to the ERP copilot API', async () => {
+  let parsedBody: unknown;
+  const client = new ERPApiClient({
+    baseUrl: 'http://erp.local',
+    fetcher: async (_url, init) => {
+      parsedBody = JSON.parse(String(init?.body));
+      return jsonResponse({
+        ok: true,
+        data: { question: 'What is at risk?', answer: 'PUMP-A needs review.' },
+        error: null,
+      });
+    },
+  });
+
+  const result = await client.ask('What is at risk?');
+
+  assert.deepEqual(parsedBody, { question: 'What is at risk?' });
+  assert.equal(result.answer, 'PUMP-A needs review.');
+});
+
+test('runCommand posts a mutating command', async () => {
+  let parsedBody: unknown;
+  const client = new ERPApiClient({
+    baseUrl: 'http://erp.local',
+    fetcher: async (_url, init) => {
+      parsedBody = JSON.parse(String(init?.body));
+      return jsonResponse({
+        ok: true,
+        data: { command: 'receive PO-1001', message: 'Received PO-1001; inventory is updated.' },
+        error: null,
+      });
+    },
+  });
+
+  const result = await client.runCommand('receive PO-1001');
+
+  assert.deepEqual(parsedBody, { command: 'receive PO-1001' });
+  assert.match(result.message, /Received PO-1001/);
+});
+
 test('API errors reject with the server message', async () => {
   const client = new ERPApiClient({
     baseUrl: 'http://erp.local',
