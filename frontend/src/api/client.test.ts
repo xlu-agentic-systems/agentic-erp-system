@@ -42,6 +42,22 @@ test('dashboard reads data from the versioned API', async () => {
   assert.equal(dashboard.kpis[0].label, 'Projected cash');
 });
 
+test('metadata reads API version information', async () => {
+  const client = new ERPApiClient({
+    baseUrl: 'http://erp.local',
+    fetcher: async () =>
+      jsonResponse({
+        ok: true,
+        data: { service: 'agentic-erp-system', app_version: 'dev', api_version: 'v1' },
+        error: null,
+      }),
+  });
+
+  const metadata = await client.metadata();
+
+  assert.equal(metadata.api_version, 'v1');
+});
+
 test('command preview posts JSON and returns non-mutating result', async () => {
   let parsedBody: unknown;
   const client = new ERPApiClient({

@@ -22,6 +22,12 @@ export type DashboardSnapshot = {
   audit_log: Array<Record<string, string>>;
 };
 
+export type ApiMetadata = {
+  service: string;
+  app_version: string;
+  api_version: string;
+};
+
 export class ERPApiClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
@@ -35,6 +41,10 @@ export class ERPApiClient {
 
   dashboard(): Promise<DashboardSnapshot> {
     return this.get<DashboardSnapshot>('/api/v1/dashboard');
+  }
+
+  metadata(): Promise<ApiMetadata> {
+    return this.get<ApiMetadata>('/api/v1/meta');
   }
 
   ask(question: string): Promise<{ question: string; answer: string }> {
