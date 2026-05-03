@@ -41,6 +41,21 @@ class LiveERPServer:
         connection.close()
         return response.status, content_type, payload
 
+    def request_with_headers(
+        self,
+        method: str,
+        path: str,
+        body: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=5)
+        connection.request(method, path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        payload = response.read()
+        response_headers = {key: value for key, value in response.getheaders()}
+        connection.close()
+        return response.status, response_headers, payload
+
 
 class AppHelperTests(unittest.TestCase):
     def test_parse_content_length_rejects_bad_values(self) -> None:
@@ -286,6 +301,20 @@ class AppHTTPTests(unittest.TestCase):
         self.assertIn("kpis", payload["data"])
         self.assertIn("fulfillment_risks", payload["data"])
         self.assertNotIn("_seed", payload["data"])
+
+    def test_api_meta_and_cors_headers_support_frontend_clients(self) -> None:
+        with LiveERPServer() as server:
+            status, headers, body = server.request_with_headers("GET", "/api/v1/meta")
+            options_status, options_headers, options_body = server.request_with_headers("OPTIONS", "/api/v1/dashboard")
+
+        payload = json.loads(body)
+        self.assertEqual(200, status)
+        self.assertEqual("v1", payload["data"]["api_version"])
+        self.assertIn("X-Request-ID", headers)
+        self.assertEqual("*", headers["Access-Control-Allow-Origin"])
+        self.assertEqual(204, options_status)
+        self.assertEqual(b"", options_body)
+        self.assertIn("POST", options_headers["Access-Control-Allow-Methods"])
 
     def test_api_command_preview_does_not_mutate_or_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

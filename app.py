@@ -11,6 +11,7 @@ import importlib
 import inspect
 import json
 import os
+import secrets
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +25,7 @@ STATIC_DIR = BASE_DIR / "static"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
+API_VERSION = "v1"
 DEFAULT_MAX_POST_BODY_BYTES = 64 * 1024
 _METRICS_LOCK = threading.Lock()
 _METRICS: dict[str, Any] = {"requests_total": 0, "status_counts": {}}
@@ -398,6 +400,7 @@ def health_payload() -> dict[str, Any]:
         "status": "ok",
         "service": "agentic-erp-system",
         "version": APP_VERSION,
+        "api_version": API_VERSION,
         "llm_enabled": bool(AI_COPILOT and getattr(AI_COPILOT, "llm_enabled", lambda: False)()),
     }
 
@@ -610,6 +613,17 @@ def quick_action_entity(action: str, params: dict[str, list[str]]) -> str:
 
 def handle_api_get(path: str) -> tuple[int, bytes, str] | None:
     route = urlparse(path).path
+    if route == "/api/v1/meta":
+        return api_json_response(
+            200,
+            api_success(
+                {
+                    "service": "agentic-erp-system",
+                    "app_version": APP_VERSION,
+                    "api_version": API_VERSION,
+                }
+            ),
+        )
     if route == "/api/v1/dashboard":
         return api_json_response(200, api_success(public_dashboard_data()))
     if route == "/api/v1/health":
@@ -933,6 +947,12 @@ def render_page(question: str = "", answer: str = "", notice: str = "") -> bytes
 
 
 class ERPRequestHandler(BaseHTTPRequestHandler):
+    def do_OPTIONS(self) -> None:
+        if urlparse(self.path).path.startswith("/api/v1/"):
+            self.respond(204, b"", "text/plain; charset=utf-8")
+            return
+        self.respond(404, b"Not found", "text/plain; charset=utf-8")
+
     def do_GET(self) -> None:
         api_result = handle_api_get(self.path)
         if api_result is not None:
@@ -1013,9 +1033,15 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
         self.respond(status, render_page(notice=message), "text/html; charset=utf-8")
 
     def respond(self, status: int, body: bytes, content_type: str) -> None:
+        request_id = secrets.token_hex(8)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Request-ID", request_id)
+        if urlparse(self.path).path.startswith("/api/v1/"):
+            self.send_header("Access-Control-Allow-Origin", os.environ.get("CORS_ALLOW_ORIGIN", "*"))
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Request-ID")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1025,6 +1051,7 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
             method=self.command,
             path=self.path,
             status=status,
+            request_id=request_id,
             content_type=content_type,
             content_length=len(body),
         )
