@@ -102,6 +102,7 @@ python3 scripts/backup_sqlite.py data/erp.backup.sqlite3
 See `docs/production_readiness.md` for the release checklist, storage contract, remaining risks, and next roadmap.
 
 See `docs/react_native_migration.md` for migration scope, API contract notes, and the 10-cycle roadmap.
+See `docs/react_native_release.md` for the React Native release notes, verification matrix, residual risks, and next roadmap.
 
 ## Optional LLM Mode
 
