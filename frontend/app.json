@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Agentic ERP",
+    "slug": "agentic-erp-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "platforms": ["ios", "android", "web"],
+    "assetBundlePatterns": ["**/*"],
+    "extra": {
+      "apiBaseUrl": "http://127.0.0.1:8000"
+    }
+  }
+}

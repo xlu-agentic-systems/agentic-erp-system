@@ -11,3 +11,6 @@ data/*.sqlite3-*
 .venv/
 venv/
 *.log
+frontend/node_modules/
+frontend/.npm-cache/
+frontend/.expo/

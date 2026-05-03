@@ -91,3 +91,7 @@ Error shape:
 ## Current Tradeoffs
 
 React Native/Expo adds mobile reach, typed frontend structure, and a cleaner client/server boundary. It also adds Node tooling, build complexity, cross-platform QA, API versioning requirements, and environment configuration. The existing HTML remains useful as a migration fallback but should not be the product surface once the React Native app covers the workflows.
+
+## Frontend Dependency Notes
+
+The initial Expo scaffold uses the current Expo/React Native package line available to npm. `npm audit --omit=dev` reports moderate advisories in Expo transitive dependencies, including PostCSS and uuid paths that `npm audit fix` cannot resolve without a breaking Expo package change. Track this before production release and re-run audit after Expo publishes compatible patched dependencies.
