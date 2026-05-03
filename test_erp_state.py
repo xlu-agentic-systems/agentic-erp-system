@@ -1,8 +1,10 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 import adaptive_erp
@@ -66,6 +68,29 @@ class ERPStatePersistenceTests(unittest.TestCase):
             loaded = erp_state.load_data(state_path)
 
         self.assertEqual(data.current_cash, loaded.current_cash)
+
+    def test_update_data_serializes_concurrent_document_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "erp_state.json"
+            erp_state.reset_data(state_path)
+
+            def create_purchase_order(_: int) -> str:
+                def mutate(data: erp_core.ERPData) -> tuple[erp_core.ERPData, str]:
+                    updated, po = erp_core.create_purchase_order(data, "PUMP-A", 1)
+                    time.sleep(0.01)
+                    return updated, po.id
+
+                _, po_id = erp_state.update_data(mutate, state_path)
+                return po_id
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                returned_ids = sorted(executor.map(create_purchase_order, range(2)))
+
+            persisted_ids = [po.id for po in erp_state.load_data(state_path).purchase_orders]
+
+        self.assertEqual(["PO-1003", "PO-1004"], returned_ids)
+        self.assertIn("PO-1003", persisted_ids)
+        self.assertIn("PO-1004", persisted_ids)
 
 
 if __name__ == "__main__":

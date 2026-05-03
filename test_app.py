@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import http.client
 import json
 import unittest
@@ -129,6 +130,24 @@ class AppHTTPTests(unittest.TestCase):
         self.assertEqual(413, status)
         self.assertIn("text/plain", content_type)
         self.assertEqual(b"Request body too large", body)
+
+    def test_parallel_quick_actions_create_distinct_purchase_orders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "erp_state.json"
+            audit_path = Path(tmp) / "audit.jsonl"
+            env = {"ERP_STATE_PATH": str(state_path), "ERP_AUDIT_PATH": str(audit_path)}
+            params = {"action": ["create_po"], "sku": ["PUMP-A"], "quantity": ["1"]}
+            with patch.dict(os.environ, env):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    messages = sorted(executor.map(lambda _: app.run_quick_action(params), range(2)))
+                data = erp_state.load_data(state_path)
+
+        self.assertEqual(
+            ["Created PO-1003 for PUMP-A with 1 units.", "Created PO-1004 for PUMP-A with 1 units."],
+            messages,
+        )
+        self.assertIn("PO-1003", [po.id for po in data.purchase_orders])
+        self.assertIn("PO-1004", [po.id for po in data.purchase_orders])
 
 
 if __name__ == "__main__":
