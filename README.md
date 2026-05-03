@@ -83,6 +83,8 @@ python3 scripts/backup_sqlite.py data/erp.backup.sqlite3
 
 See `docs/production_readiness.md` for the release checklist, storage contract, remaining risks, and next roadmap.
 
+The product surface is being migrated from raw server-rendered HTML/CSS to a React Native frontend. See `docs/react_native_migration.md` for the migration scope, API contract plan, and 10-cycle roadmap.
+
 ## Optional LLM Mode
 
 The app uses deterministic rules by default. If `.env` or the shell environment provides `OPENAI_API_KEY`, the Ask ERP panel calls the OpenAI Responses API and gives the model only a read-only, JSON summary of the ERP snapshot and the deterministic rules answer.
