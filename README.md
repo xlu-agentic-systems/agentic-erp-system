@@ -66,7 +66,7 @@ Storage configuration:
 Operational checks:
 
 - `GET /healthz` returns process health and app metadata.
-- `GET /readyz` verifies that ERP modules and local state can be loaded.
+- `GET /readyz` verifies that ERP modules load, storage can be read, and the configured storage backend accepts a write probe.
 - `GET /metrics` returns in-process request counts by HTTP status.
 
 Run the local smoke test with:

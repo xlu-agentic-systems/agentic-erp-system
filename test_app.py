@@ -98,6 +98,21 @@ class AppHTTPTests(unittest.TestCase):
         self.assertIn("application/json", ready_type)
         self.assertEqual("ready", json.loads(ready_body)["status"])
 
+    def test_ready_endpoint_reports_sqlite_storage_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=True):
+                with LiveERPServer() as server:
+                    status, content_type, body = server.request("GET", "/readyz")
+            self.assertTrue(db_path.exists())
+
+        payload = json.loads(body)
+        self.assertEqual(200, status)
+        self.assertIn("application/json", content_type)
+        self.assertEqual("ready", payload["status"])
+        self.assertEqual("sqlite", payload["checks"]["storage"]["backend"])
+        self.assertTrue(payload["checks"]["storage_writeable"])
+
     def test_static_css_and_not_found_paths(self) -> None:
         with LiveERPServer() as server:
             css_status, css_type, css_body = server.request("GET", "/static/styles.css")

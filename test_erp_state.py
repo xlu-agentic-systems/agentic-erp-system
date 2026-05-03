@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date
 import json
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -133,6 +134,19 @@ class ERPStatePersistenceTests(unittest.TestCase):
         self.assertEqual(["PO-1003", "PO-1004"], returned_ids)
         self.assertIn("PO-1003", persisted_ids)
         self.assertIn("PO-1004", persisted_ids)
+
+    def test_sqlite_storage_status_runs_write_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            with unittest.mock.patch.dict(os.environ, {"ERP_DB_PATH": str(db_path)}, clear=False):
+                status = erp_state.storage_status(write_probe=True)
+
+        self.assertEqual("sqlite", status["backend"])
+        self.assertEqual(str(db_path), status["db_path"])
+        self.assertTrue(status["state_loadable"])
+        self.assertTrue(status["audit_loadable"])
+        self.assertTrue(status["writeable"])
+        self.assertNotIn("error", status)
 
 
 if __name__ == "__main__":
