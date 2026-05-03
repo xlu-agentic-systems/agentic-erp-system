@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import importlib
 import inspect
+import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +21,12 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
+APP_VERSION = os.environ.get("APP_VERSION", "dev")
+DEFAULT_MAX_POST_BODY_BYTES = 64 * 1024
+
+
+class RequestTooLarge(ValueError):
+    pass
 
 
 def load_optional_module(name: str) -> Any | None:
@@ -94,10 +101,23 @@ def text(value: Any, fallback: str = "") -> str:
     return str(value)
 
 
-def parse_content_length(value: str | None) -> int:
+def max_post_body_bytes() -> int:
+    raw_value = os.environ.get("MAX_POST_BODY_BYTES")
+    if raw_value is None:
+        return DEFAULT_MAX_POST_BODY_BYTES
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return DEFAULT_MAX_POST_BODY_BYTES
+    return parsed if parsed > 0 else DEFAULT_MAX_POST_BODY_BYTES
+
+
+def parse_content_length(value: str | None, max_length: int | None = None) -> int:
     length = int(value or "0")
     if length < 0:
         raise ValueError("Content-Length must be non-negative")
+    if max_length is not None and length > max_length:
+        raise RequestTooLarge(f"Content-Length exceeds {max_length} bytes")
     return length
 
 
@@ -361,6 +381,39 @@ def load_dashboard_data() -> dict[str, Any]:
     base["audit_log"] = ERP_STATE.load_audit() if ERP_STATE is not None else []
 
     return base
+
+
+def health_payload() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "service": "agentic-erp-system",
+        "version": APP_VERSION,
+        "llm_enabled": bool(AI_COPILOT and getattr(AI_COPILOT, "llm_enabled", lambda: False)()),
+    }
+
+
+def readiness_payload() -> tuple[int, dict[str, Any]]:
+    checks: dict[str, Any] = {
+        "erp_core": ERP_CORE is not None,
+        "adaptive_erp": ADAPTIVE_ERP is not None,
+        "erp_state": ERP_STATE is not None,
+    }
+    if ERP_STATE is not None:
+        checks["state_path"] = str(ERP_STATE.state_path())
+        try:
+            data = current_erp_data()
+            checks["state_loadable"] = data is not None
+            checks["audit_loadable"] = isinstance(ERP_STATE.load_audit(), list)
+        except Exception as exc:
+            checks["state_loadable"] = False
+            checks["state_error"] = type(exc).__name__
+    ready = all(value for value in checks.values() if isinstance(value, bool))
+    payload = {"status": "ready" if ready else "degraded", "checks": checks}
+    return (200 if ready else 503), payload
+
+
+def json_response(payload: dict[str, Any]) -> bytes:
+    return (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
 
 
 def run_erp_command(command: str) -> str:
@@ -690,6 +743,13 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/" or self.path.startswith("/?"):
             self.respond(200, render_page(), "text/html; charset=utf-8")
             return
+        if self.path == "/healthz":
+            self.respond(200, json_response(health_payload()), "application/json; charset=utf-8")
+            return
+        if self.path == "/readyz":
+            status, payload = readiness_payload()
+            self.respond(status, json_response(payload), "application/json; charset=utf-8")
+            return
         if self.path == "/static/styles.css":
             css_path = STATIC_DIR / "styles.css"
             if css_path.exists():
@@ -704,7 +764,10 @@ class ERPRequestHandler(BaseHTTPRequestHandler):
             self.respond(404, b"Not found", "text/plain; charset=utf-8")
             return
         try:
-            length = parse_content_length(self.headers.get("Content-Length", "0"))
+            length = parse_content_length(self.headers.get("Content-Length", "0"), max_post_body_bytes())
+        except RequestTooLarge:
+            self.respond(413, b"Request body too large", "text/plain; charset=utf-8")
+            return
         except ValueError:
             self.respond(400, b"Invalid Content-Length", "text/plain; charset=utf-8")
             return

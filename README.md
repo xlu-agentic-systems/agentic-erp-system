@@ -1,8 +1,8 @@
 # Agentic ERP Analytics Demo
 
-A lightweight ERP analytics scaffold for a small distribution company. It uses synthetic, in-memory ERP data and deterministic rules, then layers read-only copilot-style summaries, risk explanations, and workflow recommendations on top of the same operational snapshot.
+A lightweight ERP analytics scaffold for a small distribution company. It starts from synthetic ERP data, persists local demo state as JSON, and layers deterministic copilot-style summaries, risk explanations, and workflow recommendations on top of the same operational snapshot.
 
-This is not a full ERP implementation yet. It does not include persistence, transaction posting, accounting periods, permissions, audit logs, or autonomous write actions.
+This is not a full ERP implementation yet. It does not include production database storage, transaction posting, accounting periods, permissions, or autonomous write actions.
 
 ## Scope
 
@@ -15,9 +15,9 @@ The MVP covers the ERP workflows that make the system feel integrated:
 - Simplified cash and inventory reporting
 - Rules-based copilot summaries, risk flags, and question answering
 - Natural-language workflow commands for reorder, receiving, and invoice payment
-- Local JSON persistence for the demo state and activity log
+- Local JSON persistence for the demo state and audit activity log
 
-Deferred areas include persistence, payroll, manufacturing, tax compliance, multi-currency accounting, full accounting correctness, and autonomous transaction execution.
+Deferred areas include production database storage, payroll, manufacturing, tax compliance, multi-currency accounting, full accounting correctness, and autonomous transaction execution.
 
 ## Run
 
@@ -35,7 +35,7 @@ python3 -m unittest
 
 ## Design
 
-The system uses three layers:
+The system uses four layers:
 
 1. `erp_core.py`: seeded ERP data and deterministic business calculations.
 2. `ai_copilot.py`: explainable recommendations, constrained natural-language intent handling, and an optional LLM answer path.
@@ -54,6 +54,11 @@ The dashboard includes a `Command ERP` panel and quick-action buttons. Supported
 - `mark INV-9001 paid`
 
 Workflow changes are saved to `data/erp_state.json`, and the activity log is saved to `data/audit.jsonl`. Both files are ignored by git.
+
+Operational checks:
+
+- `GET /healthz` returns process health and app metadata.
+- `GET /readyz` verifies that ERP modules and local state can be loaded.
 
 ## Optional LLM Mode
 
