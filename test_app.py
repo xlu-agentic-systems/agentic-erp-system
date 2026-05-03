@@ -160,6 +160,22 @@ class AppHTTPTests(unittest.TestCase):
         self.assertIn("Fulfillment Risk", html)
         self.assertIn("SO-5001", html)
         self.assertIn("PUMP-A", html)
+        self.assertIn("AR Aging", html)
+
+    def test_quick_action_accepts_partial_invoice_payment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "erp_state.json"
+            audit_path = Path(tmp) / "audit.jsonl"
+            env = {"ERP_STATE_PATH": str(state_path), "ERP_AUDIT_PATH": str(audit_path)}
+            params = {"action": ["pay_invoice"], "invoice_id": ["INV-9001"], "amount": ["500.00"]}
+            with patch.dict(os.environ, env):
+                message = app.run_quick_action(params)
+                data = erp_state.load_data(state_path)
+
+        invoice = next(invoice for invoice in data.invoices if invoice.id == "INV-9001")
+        self.assertEqual("Recorded payment for INV-9001; balance is 1000.00.", message)
+        self.assertEqual("open", invoice.status)
+        self.assertEqual("1000.00", str(invoice.balance_due))
 
 
 if __name__ == "__main__":

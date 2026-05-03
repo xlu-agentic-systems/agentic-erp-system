@@ -317,6 +317,7 @@ FALLBACK_DATA = {
         {"id": "INV-9010", "customer": "Harbor Industrial", "amount": 12400, "status": "Draft"},
     ],
     "fulfillment_risks": [],
+    "ar_aging": [],
 }
 
 
@@ -377,7 +378,7 @@ def load_dashboard_data() -> dict[str, Any]:
     base["kpis"] = normalize_kpis(base.get("kpis"))
     base["risk_flags"] = normalize_risks(base.get("risk_flags"))
     base["roles"] = normalize_roles(base.get("roles"))
-    for key in ("inventory", "sales_orders", "purchase_orders", "invoices", "fulfillment_risks"):
+    for key in ("inventory", "sales_orders", "purchase_orders", "invoices", "fulfillment_risks", "ar_aging"):
         base[key] = as_list(base.get(key)) or FALLBACK_DATA[key]
     base["audit_log"] = ERP_STATE.load_audit() if ERP_STATE is not None else []
 
@@ -451,7 +452,8 @@ def run_quick_action(params: dict[str, list[str]]) -> str:
                 return updated, f"Received {po.id}; inventory is updated."
             if action == "pay_invoice":
                 invoice_id = params.get("invoice_id", [""])[0]
-                updated, invoice = ERP_CORE.apply_invoice_payment(data, invoice_id)
+                amount = params.get("amount", [""])[0].strip() or None
+                updated, invoice = ERP_CORE.apply_invoice_payment(data, invoice_id, amount)
                 return updated, f"Recorded payment for {invoice.id}; balance is {invoice.balance_due}."
             return ERP_CORE.seed_erp_data(), "Reset ERP demo data."
 
@@ -601,6 +603,7 @@ def render_quick_actions(erp_data: Any) -> str:
         <form method="post" action="/action" class="inline-action">
             <input type="hidden" name="action" value="pay_invoice">
             <input type="hidden" name="invoice_id" value="{esc(invoice.id)}">
+            <input type="number" name="amount" min="0.01" step="0.01" max="{esc(invoice.balance_due)}" value="{esc(invoice.balance_due)}" aria-label="Payment amount for {esc(invoice.id)}">
             <button type="submit">Record payment for {esc(invoice.id)}</button>
         </form>
         """
@@ -623,7 +626,7 @@ def render_table(title: str, records: list[Any], columns: tuple[tuple[str, str],
         cells = []
         for key, _ in columns:
             value = pick(record, key, fallback="")
-            if key in {"total", "amount"}:
+            if key in {"total", "amount", "balance"}:
                 value = money(value)
             elif key == "stock":
                 value = number(value)
@@ -731,6 +734,7 @@ def render_page(question: str = "", answer: str = "", notice: str = "") -> bytes
 
         <section class="tables-grid">
             {render_table("Fulfillment Risk", data["fulfillment_risks"], (("order_id", "Order"), ("customer", "Customer"), ("sku", "SKU"), ("required", "Required"), ("available", "Available"), ("status", "Status"), ("next_receipt", "Next Receipt")))}
+            {render_table("AR Aging", data["ar_aging"], (("bucket", "Bucket"), ("count", "Invoices"), ("balance", "Balance")))}
             {render_table("Inventory", data["inventory"], (("sku", "SKU"), ("item", "Item"), ("stock", "Stock"), ("status", "Status")))}
             {render_table("Sales Orders", data["sales_orders"], (("id", "Order"), ("customer", "Customer"), ("total", "Total"), ("status", "Status")))}
             {render_table("Purchase Orders", data["purchase_orders"], (("id", "PO"), ("supplier", "Supplier"), ("total", "Total"), ("status", "Status")))}

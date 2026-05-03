@@ -55,6 +55,15 @@ class AdaptiveERPWorkflowTests(unittest.TestCase):
                 self.assertEqual(Decimal("0.00"), invoice.balance_due)
                 self.assertEqual(Decimal("14000.00"), updated.current_cash)
 
+    def test_partial_payment_command_records_only_requested_amount(self) -> None:
+        updated, result = adaptive_erp.execute_goal("record $500 payment for INV-9001", self.data, self.today)
+        invoice = next(invoice for invoice in updated.invoices if invoice.id == "INV-9001")
+
+        self.assertTrue(result.success)
+        self.assertEqual("open", invoice.status)
+        self.assertEqual(Decimal("1000.00"), invoice.balance_due)
+        self.assertIn("Recorded payment of 500", result.message)
+
     def test_unknown_goal_is_actionable_without_changing_data(self) -> None:
         updated, result = adaptive_erp.execute_goal("make the business better", self.data, self.today)
 

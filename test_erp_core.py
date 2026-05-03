@@ -11,9 +11,11 @@ from erp_core import (
     PurchaseOrder,
     SalesOrder,
     Vendor,
+    apply_invoice_payment,
     cash_projection,
     delayed_purchase_orders,
     fulfillment_risks,
+    invoice_aging_buckets,
     inventory_value,
     low_stock_items,
     money,
@@ -76,6 +78,21 @@ class SeededERPDataTests(unittest.TestCase):
         self.assertEqual(3, pump_risk["required"])
         self.assertEqual(8, pump_risk["available"])
         self.assertIn("PO-1001", pump_risk["next_receipt"])
+
+    def test_invoice_aging_buckets_summarize_open_receivables(self) -> None:
+        aging = {bucket["bucket"]: bucket for bucket in invoice_aging_buckets(self.data, self.today)}
+
+        self.assertEqual(1, aging["Current"]["count"])
+        self.assertEqual(Decimal("725.50"), aging["Current"]["balance"])
+        self.assertEqual(1, aging["1-30"]["count"])
+        self.assertEqual(Decimal("1500.00"), aging["1-30"]["balance"])
+
+    def test_partial_invoice_payment_updates_balance_and_cash(self) -> None:
+        updated, invoice = apply_invoice_payment(self.data, "INV-9001", "500.00", self.today)
+
+        self.assertEqual("open", invoice.status)
+        self.assertEqual(Decimal("1000.00"), invoice.balance_due)
+        self.assertEqual(Decimal("13000.00"), updated.current_cash)
 
 
 class CustomERPDataTests(unittest.TestCase):

@@ -213,10 +213,9 @@ label {
   gap: 10px;
 }
 
-textarea {
+textarea,
+input[type="number"] {
   width: 100%;
-  min-height: 108px;
-  resize: vertical;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 12px;
@@ -224,7 +223,13 @@ textarea {
   font: inherit;
 }
 
+textarea {
+  min-height: 108px;
+  resize: vertical;
+}
+
 textarea:focus,
+input[type="number"]:focus,
 button:focus-visible {
   outline: 3px solid rgba(15, 118, 110, 0.22);
   outline-offset: 2px;
@@ -278,6 +283,10 @@ output {
 
 .inline-action {
   margin: 0;
+}
+
+.inline-action input[type="number"] {
+  margin-bottom: 8px;
 }
 
 .inline-action button {
