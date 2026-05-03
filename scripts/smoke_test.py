@@ -45,10 +45,12 @@ def assert_status(status: int, expected: int, path: str) -> None:
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
-        state_path = Path(tmp) / "erp_state.json"
-        audit_path = Path(tmp) / "audit.jsonl"
-        os.environ["ERP_STATE_PATH"] = str(state_path)
-        os.environ["ERP_AUDIT_PATH"] = str(audit_path)
+        db_path = Path(tmp) / "erp.sqlite3"
+        backup_path = Path(tmp) / "erp.backup.sqlite3"
+        os.environ.pop("ERP_STATE_PATH", None)
+        os.environ.pop("ERP_AUDIT_PATH", None)
+        os.environ.pop("ERP_STORAGE_BACKEND", None)
+        os.environ["ERP_DB_PATH"] = str(db_path)
 
         server = ThreadingHTTPServer((app.DEFAULT_HOST, 0), app.ERPRequestHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -73,7 +75,7 @@ def main() -> int:
             if b"Preview: receive PO-1001" not in body:
                 raise AssertionError("preview response did not describe PO receipt")
 
-            preview_data = erp_state.load_data(state_path)
+            preview_data = erp_state.load_data(db_path)
             preview_po = next(po for po in preview_data.purchase_orders if po.id == "PO-1001")
             if preview_po.status != "open":
                 raise AssertionError("preview mutated purchase order state")
@@ -84,12 +86,20 @@ def main() -> int:
             if b"Received PO-1001" not in body:
                 raise AssertionError("run response did not confirm PO receipt")
 
-            updated = erp_state.load_data(state_path)
+            updated = erp_state.load_data(db_path)
             received = next(po for po in updated.purchase_orders if po.id == "PO-1001")
             if received.status != "received":
                 raise AssertionError("run command did not persist received PO")
-            if not erp_state.load_audit(audit_path):
+            if not erp_state.load_audit(db_path):
                 raise AssertionError("run command did not write audit entry")
+
+            erp_state.backup_sqlite(backup_path, db_path)
+            backup = erp_state.load_data(backup_path)
+            backup_received = next(po for po in backup.purchase_orders if po.id == "PO-1001")
+            if backup_received.status != "received":
+                raise AssertionError("SQLite backup did not preserve received PO")
+            if not erp_state.load_audit(backup_path):
+                raise AssertionError("SQLite backup did not preserve audit rows")
 
             status, _, metrics_body = request(host, port, "GET", "/metrics")
             assert_status(status, 200, "/metrics")

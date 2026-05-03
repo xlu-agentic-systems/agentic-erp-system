@@ -156,6 +156,40 @@ class ERPStatePersistenceTests(unittest.TestCase):
         self.assertEqual("", audit[0]["entity_id"])
         self.assertEqual("success", audit[0]["status"])
 
+    def test_sqlite_backup_preserves_state_and_audit_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            backup_path = Path(tmp) / "erp.backup.sqlite3"
+            erp_state.reset_data(db_path)
+
+            def mutate(data: erp_core.ERPData) -> tuple[erp_core.ERPData, str]:
+                updated, po = erp_core.receive_purchase_order(data, "PO-1001")
+                return updated, f"Received {po.id}"
+
+            erp_state.update_data_with_audit(
+                mutate,
+                lambda message: {"message": message, "action": "receive_po", "entity_id": "PO-1001"},
+                db_path,
+            )
+
+            returned_path = erp_state.backup_sqlite(backup_path, db_path)
+            loaded = erp_state.load_data(backup_path)
+            audit = erp_state.load_audit(backup_path)
+
+        received = next(po for po in loaded.purchase_orders if po.id == "PO-1001")
+        self.assertEqual(backup_path, returned_path)
+        self.assertEqual("received", received.status)
+        self.assertEqual("Received PO-1001", audit[0]["message"])
+        self.assertEqual("receive_po", audit[0]["action"])
+
+    def test_sqlite_backup_rejects_source_path_as_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            erp_state.reset_data(db_path)
+
+            with self.assertRaises(ValueError):
+                erp_state.backup_sqlite(db_path, db_path)
+
     def test_sqlite_update_data_serializes_concurrent_document_creation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "erp.sqlite3"
