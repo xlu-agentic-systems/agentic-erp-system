@@ -92,6 +92,48 @@ class ERPStatePersistenceTests(unittest.TestCase):
         self.assertIn("PO-1003", persisted_ids)
         self.assertIn("PO-1004", persisted_ids)
 
+    def test_sqlite_save_load_and_audit_round_trip(self) -> None:
+        data = erp_core.seed_erp_data(date(2026, 5, 2))
+        updated, result = adaptive_erp.execute_goal("receive PO-1001", data, date(2026, 5, 2))
+        self.assertTrue(result.success)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            erp_state.save_data(updated, db_path)
+            erp_state.append_audit(result.message, db_path)
+
+            loaded = erp_state.load_data(db_path)
+            audit = erp_state.load_audit(db_path)
+
+        received = next(po for po in loaded.purchase_orders if po.id == "PO-1001")
+        pump_inventory = next(item for item in loaded.inventory if item.product_id == "P-200")
+        self.assertEqual("received", received.status)
+        self.assertEqual(26, pump_inventory.quantity_on_hand)
+        self.assertEqual(["Received PO-1001; inventory is updated."], [entry["message"] for entry in audit])
+
+    def test_sqlite_update_data_serializes_concurrent_document_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "erp.sqlite3"
+            erp_state.reset_data(db_path)
+
+            def create_purchase_order(_: int) -> str:
+                def mutate(data: erp_core.ERPData) -> tuple[erp_core.ERPData, str]:
+                    updated, po = erp_core.create_purchase_order(data, "PUMP-A", 1)
+                    time.sleep(0.01)
+                    return updated, po.id
+
+                _, po_id = erp_state.update_data(mutate, db_path)
+                return po_id
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                returned_ids = sorted(executor.map(create_purchase_order, range(2)))
+
+            persisted_ids = [po.id for po in erp_state.load_data(db_path).purchase_orders]
+
+        self.assertEqual(["PO-1003", "PO-1004"], returned_ids)
+        self.assertIn("PO-1003", persisted_ids)
+        self.assertIn("PO-1004", persisted_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

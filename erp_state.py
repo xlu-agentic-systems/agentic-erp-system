@@ -8,6 +8,7 @@ from decimal import Decimal
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 from typing import Any, Callable, TypeVar
@@ -23,6 +24,7 @@ import erp_core
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_PATH = BASE_DIR / "data" / "erp_state.json"
 DEFAULT_AUDIT_PATH = BASE_DIR / "data" / "audit.jsonl"
+DEFAULT_DB_PATH = BASE_DIR / "data" / "erp.sqlite3"
 STATE_SCHEMA_VERSION = 1
 _LAST_RECOVERY: dict[str, str] | None = None
 _PROCESS_LOCK = threading.Lock()
@@ -37,11 +39,67 @@ def audit_path() -> Path:
     return Path(os.environ.get("ERP_AUDIT_PATH", DEFAULT_AUDIT_PATH))
 
 
+def db_path() -> Path:
+    return Path(os.environ.get("ERP_DB_PATH", DEFAULT_DB_PATH))
+
+
+def storage_backend() -> str:
+    backend = os.environ.get("ERP_STORAGE_BACKEND", "").strip().lower()
+    if backend in {"sqlite", "json"}:
+        return backend
+    if os.environ.get("ERP_DB_PATH"):
+        return "sqlite"
+    if os.environ.get("ERP_STATE_PATH"):
+        return "json"
+    return "sqlite"
+
+
 def last_recovery() -> dict[str, str] | None:
     return dict(_LAST_RECOVERY) if _LAST_RECOVERY is not None else None
 
 
 def load_data(path: str | Path | None = None) -> erp_core.ERPData:
+    if _should_use_sqlite(path):
+        return _load_data_sqlite(_resolved_db_path(path))
+    return _load_data_json(path)
+
+
+def save_data(data: erp_core.ERPData, path: str | Path | None = None) -> None:
+    if _should_use_sqlite(path):
+        _save_data_sqlite(data, _resolved_db_path(path))
+        return
+    _save_data_json(data, path)
+
+
+def reset_data(path: str | Path | None = None) -> erp_core.ERPData:
+    data = erp_core.seed_erp_data()
+    save_data(data, path)
+    return data
+
+
+def update_data(
+    mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
+    path: str | Path | None = None,
+) -> tuple[erp_core.ERPData, T]:
+    if _should_use_sqlite(path):
+        return _update_data_sqlite(mutator, _resolved_db_path(path))
+    return _update_data_json(mutator, path)
+
+
+def append_audit(message: str, path: str | Path | None = None) -> None:
+    if _should_use_sqlite_audit(path):
+        _append_audit_sqlite(message, _resolved_db_path(path))
+        return
+    _append_audit_json(message, path)
+
+
+def load_audit(path: str | Path | None = None, limit: int = 8) -> list[dict[str, str]]:
+    if _should_use_sqlite_audit(path):
+        return _load_audit_sqlite(_resolved_db_path(path), limit)
+    return _load_audit_json(path, limit)
+
+
+def _load_data_json(path: str | Path | None = None) -> erp_core.ERPData:
     global _LAST_RECOVERY
     target = Path(path) if path is not None else state_path()
     if not target.exists():
@@ -59,7 +117,7 @@ def load_data(path: str | Path | None = None) -> erp_core.ERPData:
         return erp_core.seed_erp_data()
 
 
-def save_data(data: erp_core.ERPData, path: str | Path | None = None) -> None:
+def _save_data_json(data: erp_core.ERPData, path: str | Path | None = None) -> None:
     target = Path(path) if path is not None else state_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -69,13 +127,7 @@ def save_data(data: erp_core.ERPData, path: str | Path | None = None) -> None:
     _atomic_write_text(target, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def reset_data(path: str | Path | None = None) -> erp_core.ERPData:
-    data = erp_core.seed_erp_data()
-    save_data(data, path)
-    return data
-
-
-def update_data(
+def _update_data_json(
     mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
     path: str | Path | None = None,
 ) -> tuple[erp_core.ERPData, T]:
@@ -95,7 +147,7 @@ def update_data(
                 _unlock_file(lock_handle)
 
 
-def append_audit(message: str, path: str | Path | None = None) -> None:
+def _append_audit_json(message: str, path: str | Path | None = None) -> None:
     target = Path(path) if path is not None else audit_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     entry = {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), "message": message}
@@ -103,7 +155,7 @@ def append_audit(message: str, path: str | Path | None = None) -> None:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
-def load_audit(path: str | Path | None = None, limit: int = 8) -> list[dict[str, str]]:
+def _load_audit_json(path: str | Path | None = None, limit: int = 8) -> list[dict[str, str]]:
     target = Path(path) if path is not None else audit_path()
     if not target.exists():
         return []
@@ -118,6 +170,157 @@ def load_audit(path: str | Path | None = None, limit: int = 8) -> list[dict[str,
         if isinstance(entry, dict) and "message" in entry:
             entries.append(entry)
     return list(reversed(entries[-limit:]))
+
+
+def _should_use_sqlite(path: str | Path | None) -> bool:
+    if path is not None:
+        return _looks_like_sqlite_path(Path(path))
+    return storage_backend() == "sqlite"
+
+
+def _should_use_sqlite_audit(path: str | Path | None) -> bool:
+    if path is not None:
+        return _looks_like_sqlite_path(Path(path))
+    if os.environ.get("ERP_AUDIT_PATH"):
+        return False
+    return storage_backend() == "sqlite"
+
+
+def _looks_like_sqlite_path(path: Path) -> bool:
+    return path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}
+
+
+def _resolved_db_path(path: str | Path | None) -> Path:
+    if path is not None:
+        return Path(path)
+    return db_path()
+
+
+def _connect_sqlite(target: Path) -> sqlite3.Connection:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(target, timeout=30)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA journal_mode = WAL")
+    return connection
+
+
+def _ensure_sqlite_schema(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS erp_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            message TEXT NOT NULL
+        )
+        """
+    )
+    connection.commit()
+
+
+def _load_data_sqlite(path: Path) -> erp_core.ERPData:
+    with _connect_sqlite(path) as connection:
+        _ensure_sqlite_schema(connection)
+        data = _read_sqlite_data(connection)
+        if data is None:
+            data = erp_core.seed_erp_data()
+            _write_sqlite_data(connection, data)
+            connection.commit()
+        return data
+
+
+def _save_data_sqlite(data: erp_core.ERPData, path: Path) -> None:
+    with _connect_sqlite(path) as connection:
+        _ensure_sqlite_schema(connection)
+        _write_sqlite_data(connection, data)
+        connection.commit()
+
+
+def _update_data_sqlite(
+    mutator: Callable[[erp_core.ERPData], tuple[erp_core.ERPData, T]],
+    path: Path,
+) -> tuple[erp_core.ERPData, T]:
+    with _PROCESS_LOCK:
+        with _connect_sqlite(path) as connection:
+            _ensure_sqlite_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                current = _read_sqlite_data(connection) or erp_core.seed_erp_data()
+                updated, result = mutator(current)
+                if updated is not current:
+                    _write_sqlite_data(connection, updated)
+                connection.commit()
+                return updated, result
+            except Exception:
+                connection.rollback()
+                raise
+
+
+def _append_audit_sqlite(message: str, path: Path) -> None:
+    with _connect_sqlite(path) as connection:
+        _ensure_sqlite_schema(connection)
+        connection.execute(
+            "INSERT INTO audit_log (timestamp, message) VALUES (?, ?)",
+            (datetime.now(timezone.utc).isoformat(timespec="seconds"), message),
+        )
+        connection.commit()
+
+
+def _load_audit_sqlite(path: Path, limit: int = 8) -> list[dict[str, str]]:
+    with _connect_sqlite(path) as connection:
+        _ensure_sqlite_schema(connection)
+        rows = connection.execute(
+            """
+            SELECT timestamp, message
+            FROM audit_log
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [{"timestamp": row["timestamp"], "message": row["message"]} for row in rows]
+
+
+def _read_sqlite_data(connection: sqlite3.Connection) -> erp_core.ERPData | None:
+    row = connection.execute(
+        "SELECT schema_version, payload FROM erp_state WHERE id = 1"
+    ).fetchone()
+    if row is None:
+        return None
+    if int(row["schema_version"]) != STATE_SCHEMA_VERSION:
+        raise ValueError("unsupported state schema version")
+    payload = json.loads(row["payload"])
+    if not isinstance(payload, dict):
+        raise ValueError("state data must be a JSON object")
+    return _erp_data_from_dict(payload)
+
+
+def _write_sqlite_data(connection: sqlite3.Connection, data: erp_core.ERPData) -> None:
+    connection.execute(
+        """
+        INSERT INTO erp_state (id, schema_version, payload, updated_at)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            schema_version = excluded.schema_version,
+            payload = excluded.payload,
+            updated_at = excluded.updated_at
+        """,
+        (
+            STATE_SCHEMA_VERSION,
+            json.dumps(_jsonable(asdict(data)), sort_keys=True),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        ),
+    )
 
 
 def _state_data_payload(payload: Any) -> dict[str, Any]:

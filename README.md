@@ -1,8 +1,8 @@
 # Agentic ERP Analytics Demo
 
-A lightweight ERP analytics scaffold for a small distribution company. It starts from synthetic ERP data, persists local demo state as JSON, and layers deterministic copilot-style summaries, risk explanations, and workflow recommendations on top of the same operational snapshot.
+A lightweight ERP analytics scaffold for a small distribution company. It starts from synthetic ERP data, persists local demo state in SQLite by default, and layers deterministic copilot-style summaries, risk explanations, and workflow recommendations on top of the same operational snapshot.
 
-This is not a full ERP implementation yet. It does not include production database storage, transaction posting, accounting periods, permissions, or autonomous write actions.
+This is not a full ERP implementation yet. It does not include transaction posting, accounting periods, permissions, or autonomous write actions.
 
 ## Scope
 
@@ -15,9 +15,9 @@ The MVP covers the ERP workflows that make the system feel integrated:
 - Simplified cash and inventory reporting
 - Rules-based copilot summaries, risk flags, and question answering
 - Natural-language workflow commands for reorder, receiving, and invoice payment
-- Local JSON persistence for the demo state and audit activity log
+- Local SQLite persistence for the demo state and audit activity log, with JSON file compatibility for legacy/demo runs
 
-Deferred areas include production database storage, payroll, manufacturing, tax compliance, multi-currency accounting, full accounting correctness, and autonomous transaction execution.
+Deferred areas include payroll, manufacturing, tax compliance, multi-currency accounting, full accounting correctness, and autonomous transaction execution.
 
 ## Run
 
@@ -54,7 +54,14 @@ The dashboard includes a `Command ERP` panel and quick-action buttons. Commands 
 - `mark INV-9001 paid`
 - `record $500 payment for INV-9001`
 
-Workflow changes are saved to `data/erp_state.json`, and the activity log is saved to `data/audit.jsonl`. Both files are ignored by git.
+Workflow changes and audit activity are saved to `data/erp.sqlite3` by default. The app still supports the earlier JSON files by setting `ERP_STORAGE_BACKEND=json` or `ERP_STATE_PATH`.
+
+Storage configuration:
+
+- `ERP_DB_PATH`, optional SQLite path, defaults to `data/erp.sqlite3`
+- `ERP_STORAGE_BACKEND`, optional `sqlite` or `json`, defaults to `sqlite`
+- `ERP_STATE_PATH`, optional JSON state path; setting it without `ERP_STORAGE_BACKEND` selects JSON compatibility mode
+- `ERP_AUDIT_PATH`, optional JSONL audit path; setting it keeps audit activity outside SQLite for compatibility
 
 Operational checks:
 
