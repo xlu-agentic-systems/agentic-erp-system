@@ -99,6 +99,13 @@ def load_audit(path: str | Path | None = None, limit: int = 8) -> list[dict[str,
     return _load_audit_json(path, limit)
 
 
+def storage_status(write_probe: bool = False) -> dict[str, Any]:
+    backend = storage_backend()
+    if backend == "sqlite":
+        return _sqlite_storage_status(write_probe)
+    return _json_storage_status(write_probe)
+
+
 def _load_data_json(path: str | Path | None = None) -> erp_core.ERPData:
     global _LAST_RECOVERY
     target = Path(path) if path is not None else state_path()
@@ -225,6 +232,15 @@ def _ensure_sqlite_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS storage_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     connection.commit()
 
 
@@ -321,6 +337,71 @@ def _write_sqlite_data(connection: sqlite3.Connection, data: erp_core.ERPData) -
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
         ),
     )
+
+
+def _sqlite_storage_status(write_probe: bool) -> dict[str, Any]:
+    target = db_path()
+    status: dict[str, Any] = {
+        "backend": "sqlite",
+        "db_path": str(target),
+        "schema_version": STATE_SCHEMA_VERSION,
+        "state_loadable": False,
+        "audit_loadable": False,
+        "writeable": False,
+    }
+    try:
+        with _connect_sqlite(target) as connection:
+            _ensure_sqlite_schema(connection)
+            _read_sqlite_data(connection)
+            status["state_loadable"] = True
+            connection.execute("SELECT COUNT(*) FROM audit_log").fetchone()
+            status["audit_loadable"] = True
+            if write_probe:
+                timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    INSERT INTO storage_metadata (key, value, updated_at)
+                    VALUES ('readiness_probe', 'ok', ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at
+                    """,
+                    (timestamp,),
+                )
+                connection.commit()
+            status["writeable"] = True
+    except Exception as exc:
+        status["error"] = type(exc).__name__
+    return status
+
+
+def _json_storage_status(write_probe: bool) -> dict[str, Any]:
+    target = state_path()
+    audit = audit_path()
+    status: dict[str, Any] = {
+        "backend": "json",
+        "state_path": str(target),
+        "audit_path": str(audit),
+        "schema_version": STATE_SCHEMA_VERSION,
+        "state_loadable": False,
+        "audit_loadable": False,
+        "writeable": False,
+    }
+    try:
+        load_data(target)
+        status["state_loadable"] = True
+        status["audit_loadable"] = isinstance(load_audit(audit), list)
+        if write_probe:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=target.parent, delete=True) as handle:
+                handle.write("ok")
+                handle.flush()
+                os.fsync(handle.fileno())
+        status["writeable"] = True
+    except Exception as exc:
+        status["error"] = type(exc).__name__
+    return status
 
 
 def _state_data_payload(payload: Any) -> dict[str, Any]:

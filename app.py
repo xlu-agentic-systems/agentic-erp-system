@@ -405,14 +405,11 @@ def readiness_payload() -> tuple[int, dict[str, Any]]:
         "erp_state": ERP_STATE is not None,
     }
     if ERP_STATE is not None:
-        checks["state_path"] = str(ERP_STATE.state_path())
-        try:
-            data = current_erp_data()
-            checks["state_loadable"] = data is not None
-            checks["audit_loadable"] = isinstance(ERP_STATE.load_audit(), list)
-        except Exception as exc:
-            checks["state_loadable"] = False
-            checks["state_error"] = type(exc).__name__
+        storage_status = ERP_STATE.storage_status(write_probe=True)
+        checks["storage"] = storage_status
+        checks["state_loadable"] = bool(storage_status.get("state_loadable"))
+        checks["audit_loadable"] = bool(storage_status.get("audit_loadable"))
+        checks["storage_writeable"] = bool(storage_status.get("writeable"))
     ready = all(value for value in checks.values() if isinstance(value, bool))
     payload = {"status": "ready" if ready else "degraded", "checks": checks}
     return (200 if ready else 503), payload
